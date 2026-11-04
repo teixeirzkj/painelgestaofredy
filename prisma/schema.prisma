@@ -1,0 +1,545 @@
+// Frédy Gestão — modelo de dados
+//
+// Convenções:
+// - Valores monetários: inteiros em CENTAVOS (sufixo Cents). Nunca float.
+// - Datas de calendário (vencimento, data da venda, viagem): String "YYYY-MM-DD",
+//   interpretadas no fuso horário da agência (Company.timezone).
+// - Timestamps (createdAt etc.): DateTime UTC.
+// - "Enums" são String validadas na aplicação (src/lib/constants.ts), para manter o
+//   schema portável entre SQLite (desenvolvimento) e PostgreSQL (produção).
+// - Toda entidade de negócio possui companyId (isolamento multi-tenant).
+// - Lançamentos gerados automaticamente têm sourceKey único por empresa (idempotência).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Para produção com PostgreSQL troque para "postgresql" (veja README).
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                     String   @id @default(cuid())
+  name                   String
+  document               String?
+  timezone               String   @default("America/Sao_Paulo")
+  isDemo                 Boolean  @default(false)
+  commissionPayDay       Int      @default(5) // dia do mês seguinte para pagamento de comissões
+  upcomingDueDays        Int      @default(5) // janela de "próximo do vencimento"
+  upcomingTripDays       Int      @default(7) // janela de "viagem próxima"
+  webhookUrl             String? // destino genérico de eventos (opcional)
+  webhookSecret          String?
+  apiKeyHash             String? // chave para API de eventos (hash SHA-256)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  users              User[]
+  rolePermissions    RolePermission[]
+  clients            Client[]
+  passengers         Passenger[]
+  suppliers          Supplier[]
+  sales              Sale[]
+  saleItems          SaleItem[]
+  reservations       Reservation[]
+  receivables        Receivable[]
+  payables           Payable[]
+  settlements        Settlement[]
+  accounts           FinancialAccount[]
+  transfers          Transfer[]
+  commissions        Commission[]
+  contractTemplates  ContractTemplate[]
+  contracts          Contract[]
+  automationSettings AutomationSetting[]
+  automationEvents   AutomationEvent[]
+  auditLogs          AuditLog[]
+  attachments        Attachment[]
+  statementLines     BankStatementLine[]
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  companyId          String
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name               String
+  email              String   @unique
+  passwordHash       String
+  role               String // ADMIN | GESTOR | VENDEDOR | FINANCEIRO
+  active             Boolean  @default(true)
+  commissionRateBps  Int      @default(0) // % padrão de comissão sobre a receita da agência (basis points)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  salesAsSeller Sale[]       @relation("SaleSeller")
+  salesCreated  Sale[]       @relation("SaleCreatedBy")
+  commissions   Commission[]
+  clientsOwned  Client[]
+  auditLogs     AuditLog[]
+
+  @@index([companyId])
+}
+
+/// Sobrescritas de permissão por perfil e empresa (permissões configuráveis).
+model RolePermission {
+  id         String  @id @default(cuid())
+  companyId  String
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role       String
+  permission String
+  allowed    Boolean
+
+  @@unique([companyId, role, permission])
+}
+
+model Client {
+  id               String    @id @default(cuid())
+  companyId        String
+  company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name             String
+  document         String? // CPF ou CNPJ (somente dígitos)
+  phone            String?
+  whatsapp         String?
+  email            String?
+  birthDate        String?
+  zipCode          String?
+  street           String?
+  number           String?
+  complement       String?
+  district         String?
+  city             String?
+  state            String?
+  notes            String?
+  consentMessaging Boolean   @default(false) // consentimento para comunicações automáticas (LGPD)
+  fredyContactId   String? // vínculo futuro com o contato no CRM Frédy
+  ownerId          String?
+  owner            User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  archivedAt       DateTime?
+
+  sales       Sale[]
+  passengers  Passenger[]
+  receivables Receivable[]
+
+  @@unique([companyId, document])
+  @@index([companyId, name])
+}
+
+model Passenger {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId         String
+  sale           Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  clientId       String?
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  name           String
+  document       String?
+  birthDate      String?
+  passportNumber String? // dado sensível: opcional, exibido mascarado
+  passportExpiry String?
+  createdAt      DateTime @default(now())
+
+  @@index([companyId, saleId])
+}
+
+model Supplier {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  document    String? // CNPJ
+  contactName String?
+  email       String?
+  phone       String?
+  category    String // OPERADORA | CIA_AEREA | HOTEL | CONSOLIDADORA | SEGURADORA | RECEPTIVO | TRANSPORTADORA | OUTROS
+  bankInfo    String?
+  pixKey      String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+
+  saleItems    SaleItem[]
+  payables     Payable[]
+  receivables  Receivable[]
+  reservations Reservation[]
+
+  @@index([companyId, name])
+}
+
+model Sale {
+  id                    String    @id @default(cuid())
+  companyId             String
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  number                Int
+  code                  String // ex.: V-2026-0001
+  saleDate              String
+  clientId              String
+  client                Client    @relation(fields: [clientId], references: [id])
+  sellerId              String
+  seller                User      @relation("SaleSeller", fields: [sellerId], references: [id])
+  createdById           String
+  createdBy             User      @relation("SaleCreatedBy", fields: [createdById], references: [id])
+  mainProductType       String
+  destination           String?
+  tripStart             String?
+  tripEnd               String?
+  passengerCount        Int       @default(1)
+  locator               String?
+  status                String // ORCAMENTO | CONFIRMADA | CONCLUIDA | CANCELADA
+  // Valores calculados (centavos) — recalculados a cada alteração
+  feesCents             Int       @default(0)
+  discountCents         Int       @default(0)
+  grossCents            Int       @default(0) // faturamento comercial
+  clientPayableCents    Int       @default(0) // valor que o cliente paga à agência
+  costCents             Int       @default(0) // custos/repasses a fornecedores
+  agencyRevenueCents    Int       @default(0) // receita própria da agência
+  sellerCommissionCents Int       @default(0)
+  grossProfitCents      Int       @default(0)
+  marginBps             Int       @default(0)
+  paymentPlanJson       String    @default("[]") // parcelas planejadas [{key, dueDate, amountCents, method, description}]
+  notes                 String?
+  confirmedAt           DateTime?
+  cancelledAt           DateTime?
+  cancelReason          String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  items        SaleItem[]
+  passengers   Passenger[]
+  reservations Reservation[]
+  receivables  Receivable[]
+  payables     Payable[]
+  commission   Commission?
+  contracts    Contract[]
+
+  @@unique([companyId, number])
+  @@unique([companyId, code])
+  @@index([companyId, saleDate])
+  @@index([companyId, sellerId])
+}
+
+model SaleItem {
+  id                      String   @id @default(cuid())
+  companyId               String
+  company                 Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId                  String
+  sale                    Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productType             String // AEREO | HOTEL | PACOTE | CRUZEIRO | SEGURO | PASSEIO | TRANSFER | OUTROS
+  description             String?
+  supplierId              String?
+  supplier                Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  commercialModel         String // INTERMEDIACAO | REVENDA | COMISSAO
+  priceCents              Int // valor vendido ao cliente
+  costCents               Int      @default(0) // custo/repasse ao fornecedor (INTERMEDIACAO/REVENDA)
+  supplierCommissionCents Int      @default(0) // comissão paga pelo fornecedor (modelo COMISSAO)
+  supplierDueDate         String? // vencimento do repasse / recebimento da comissão
+  locator                 String?
+  sortOrder               Int      @default(0)
+
+  reservation Reservation?
+
+  @@index([companyId, saleId])
+}
+
+model Reservation {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId      String
+  sale        Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  saleItemId  String    @unique
+  saleItem    SaleItem  @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  supplierId  String?
+  supplier    Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  productType String
+  locator     String?
+  startDate   String?
+  endDate     String?
+  status      String // PENDENTE | CONFIRMADA | CANCELADA
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([companyId, startDate])
+}
+
+model Receivable {
+  id                String    @id @default(cuid())
+  companyId         String
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceKey         String? // idempotência de lançamentos automáticos
+  origin            String // VENDA | COMISSAO_FORNECEDOR | MANUAL
+  clientId          String?
+  client            Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  supplierId        String?
+  supplier          Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  saleId            String?
+  sale              Sale?     @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  description       String
+  category          String    @default("VENDAS")
+  amountCents       Int // valor original
+  settledCents      Int       @default(0) // valor abatido do saldo (inclui descontos concedidos na baixa)
+  receivedCents     Int       @default(0) // dinheiro efetivamente recebido (inclui juros)
+  dueDate           String
+  method            String?
+  installmentNumber Int?
+  installmentCount  Int?
+  status            String // PENDENTE | PARCIAL | PAGO | CANCELADO  (VENCIDO é derivado)
+  notes             String?
+  cancelledAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  settlements Settlement[]
+  attachments Attachment[]
+
+  @@unique([companyId, sourceKey])
+  @@index([companyId, dueDate])
+  @@index([companyId, status])
+}
+
+model Payable {
+  id                String      @id @default(cuid())
+  companyId         String
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceKey         String?
+  origin            String // CUSTO_VENDA | COMISSAO_VENDEDOR | MANUAL | RECORRENTE
+  supplierId        String?
+  supplier          Supplier?   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  saleId            String?
+  sale              Sale?       @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  saleItemId        String?
+  commissionId      String?     @unique
+  commission        Commission? @relation(fields: [commissionId], references: [id], onDelete: SetNull)
+  description       String
+  category          String // FORNECEDORES | SALARIOS | COMISSOES | ALUGUEL | MARKETING | SISTEMAS | IMPOSTOS | ADMINISTRATIVAS | OUTROS
+  amountCents       Int
+  settledCents      Int         @default(0)
+  paidCents         Int         @default(0)
+  dueDate           String
+  method            String?
+  installmentNumber Int?
+  installmentCount  Int?
+  recurrenceGroup   String?
+  status            String
+  notes             String?
+  cancelledAt       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  settlements Settlement[]
+  attachments Attachment[]
+
+  @@unique([companyId, sourceKey])
+  @@index([companyId, dueDate])
+  @@index([companyId, status])
+}
+
+/// Baixa financeira (recebimento ou pagamento). Nunca é apagada: estornos marcam reversedAt.
+model Settlement {
+  id             String            @id @default(cuid())
+  companyId      String
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind           String // RECEBIMENTO | PAGAMENTO
+  receivableId   String?
+  receivable     Receivable?       @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  payableId      String?
+  payable        Payable?          @relation(fields: [payableId], references: [id], onDelete: Restrict)
+  accountId      String
+  account        FinancialAccount  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  date           String
+  amountCents    Int // dinheiro movimentado
+  interestCents  Int               @default(0)
+  discountCents  Int               @default(0)
+  method         String?
+  notes          String?
+  createdById    String?
+  reversedAt     DateTime?
+  reversalReason String?
+  createdAt      DateTime          @default(now())
+
+  attachments    Attachment[]
+  statementLines BankStatementLine[]
+
+  @@index([companyId, date])
+}
+
+model FinancialAccount {
+  id                  String   @id @default(cuid())
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name                String
+  type                String // BANCO | CAIXA | RECEBIVEIS | OUTRA
+  bankName            String?
+  initialBalanceCents Int      @default(0)
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  settlements    Settlement[]
+  transfersOut   Transfer[]          @relation("TransferFrom")
+  transfersIn    Transfer[]          @relation("TransferTo")
+  statementLines BankStatementLine[]
+}
+
+model Transfer {
+  id            String           @id @default(cuid())
+  companyId     String
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromAccountId String
+  fromAccount   FinancialAccount @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccountId   String
+  toAccount     FinancialAccount @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  amountCents   Int
+  date          String
+  description   String?
+  reversedAt    DateTime?
+  createdAt     DateTime         @default(now())
+
+  @@index([companyId, date])
+}
+
+model Commission {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId      String   @unique
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sellerId    String
+  seller      User     @relation(fields: [sellerId], references: [id])
+  amountCents Int
+  status      String // PENDENTE | PAGA | CANCELADA
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  payable Payable?
+
+  @@index([companyId, sellerId])
+}
+
+model ContractTemplate {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  productType String // tipo de produto principal atendido
+  body        String // texto com variáveis {{cliente.nome}} etc.
+  clauses     String   @default("") // cláusulas específicas (cancelamento, alteração)
+  active      Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  contracts Contract[]
+}
+
+model Contract {
+  id                String            @id @default(cuid())
+  companyId         String
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId            String
+  sale              Sale              @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  templateId        String?
+  template          ContractTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateVersion   Int?
+  status            String // NAO_GERADO | EM_PREPARACAO | AGUARDANDO_ENVIO | ENVIADO | ASSINADO | CANCELADO
+  version           Int               @default(0) // versão emitida
+  content           String? // conteúdo renderizado da última emissão/prévia
+  missingFieldsJson String            @default("[]")
+  outdated          Boolean           @default(false) // venda alterada após emissão
+  issuedAt          DateTime?
+  signatureProvider String?
+  externalId        String?
+  sentAt            DateTime?
+  signedAt          DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([companyId, saleId])
+}
+
+model AutomationSetting {
+  id         String  @id @default(cuid())
+  companyId  String
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  key        String
+  enabled    Boolean @default(false)
+  configJson String  @default("{}")
+
+  @@unique([companyId, key])
+}
+
+model AutomationEvent {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type           String // venda.confirmada | pagamento.identificado | ...
+  entityType     String
+  entityId       String
+  payloadJson    String
+  idempotencyKey String
+  status         String // PENDENTE | ENTREGUE | SEM_DESTINO | FALHOU | IGNORADO
+  attempts       Int       @default(0)
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([companyId, idempotencyKey])
+  @@index([companyId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  dataJson   String?
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, entityType, entityId])
+}
+
+model Attachment {
+  id           String      @id @default(cuid())
+  companyId    String
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  receivableId String?
+  receivable   Receivable? @relation(fields: [receivableId], references: [id], onDelete: SetNull)
+  payableId    String?
+  payable      Payable?    @relation(fields: [payableId], references: [id], onDelete: SetNull)
+  settlementId String?
+  settlement   Settlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String
+  uploadedById String?
+  createdAt    DateTime    @default(now())
+}
+
+model BankStatementLine {
+  id           String           @id @default(cuid())
+  companyId    String
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  accountId    String
+  account      FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date         String
+  description  String
+  amountCents  Int // positivo = crédito, negativo = débito
+  fingerprint  String // detecção de duplicidade
+  importBatch  String
+  status       String // PENDENTE | CONCILIADO | IGNORADO
+  settlementId String?
+  settlement   Settlement?      @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+
+  @@unique([companyId, accountId, fingerprint])
+  @@index([companyId, accountId, date])
+}

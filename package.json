@@ -1,0 +1,53 @@
+{
+  "name": "fredy-gestao",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "node -e \"for (const f of ['prisma/dev.db','prisma/dev.db-journal']) require('fs').rmSync(f,{force:true})\" && prisma db push && tsx prisma/seed.ts",
+    "test": "vitest run",
+    "setup": "npm install && prisma db push && tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bcryptjs": "3.0.3",
+    "clsx": "2.1.1",
+    "jose": "6.2.12",
+    "lucide-react": "1.57.0",
+    "next": "16.4.1",
+    "papaparse": "5.7.0",
+    "react": "19.1.10",
+    "react-dom": "19.1.10",
+    "recharts": "3.10.1",
+    "server-only": "0.0.1",
+    "sonner": "2.0.8",
+    "tailwind-merge": "3.7.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "22.18.0",
+    "@types/papaparse": "5.3.16",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "prisma": "6.19.3",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "prisma@6.19.3": true
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* Identidade Frédy Gestão (cores provisórias definidas no briefing) */
+@theme {
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dce8fd;
+  --color-brand-200: #b6cff9;
+  --color-brand-500: #2f6fdc;
+  --color-brand-600: #175cd3;
+  --color-brand-700: #124aa9;
+  --color-brand-900: #102a56;
+  --color-surface: #f7f9fc;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+  --color-line: #e4e9f1;
+  --color-success: #16a34a;
+  --color-danger: #dc2626;
+  --color-warning: #d97706;
+  --color-series-1: #175cd3;
+  --color-series-2: #eb6834;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html, body { background: var(--color-surface); color: var(--color-ink); }
+body { -webkit-font-smoothing: antialiased; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .print-area { box-shadow: none !important; border: none !important; padding: 0 !important; }
+}
