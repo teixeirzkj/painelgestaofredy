@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
-import { Plus, Plane, ShieldCheck, ShieldOff } from "lucide-react";
+import { Plus, Plane, ShieldCheck, ShieldOff, Map, IdCard, AlertTriangle } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can } from "@/server/context";
 import { getClient } from "@/server/services/registry";
 import { Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th, Badge } from "@/components/ui";
-import { ContractStatusBadge, EntryStatusBadge, SaleStatusBadge } from "@/components/status";
+import { ContractStatusBadge, EntryStatusBadge, SaleStatusBadge, TripStatusBadge } from "@/components/status";
+import { Notice } from "@/components/ui";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
-import { formatDocument } from "@/lib/utils";
+import { formatDocument, maskPassport } from "@/lib/utils";
 import { PRODUCT_TYPES } from "@/lib/constants";
 import type { Params } from "@/lib/params";
 import { ArchiveClientButton, EditClientButton } from "../client-buttons";
@@ -18,7 +19,7 @@ export const metadata = { title: "Cliente" };
 export default async function ClientPage({ params }: { params: Params }) {
   const ctx = await requirePageContext();
   const { id } = await params;
-  const { client: c, sales, receivables, contracts, stats } = await orNotFound(getClient(ctx, id));
+  const { client: c, sales, receivables, contracts, stats, trips, asPassenger, passportAlert } = await orNotFound(getClient(ctx, id));
   const address = [c.street && `${c.street}${c.number ? `, ${c.number}` : ""}`, c.complement, c.district, c.city && `${c.city}${c.state ? `/${c.state}` : ""}`, c.zipCode].filter(Boolean).join(" · ");
   const canManage = can(ctx, "clients.manage");
 
@@ -28,7 +29,7 @@ export default async function ClientPage({ params }: { params: Params }) {
         back={{ href: "/clientes", label: "Clientes" }}
         title={
           <span className="flex items-center gap-2">
-            {c.name} {c.archivedAt && <Badge>Arquivado</Badge>}
+            {c.name} {c.personType === "PJ" && <Badge tone="violet">Pessoa jurídica</Badge>} {c.archivedAt && <Badge>Arquivado</Badge>}
           </span>
         }
         description={[c.document && formatDocument(c.document), c.whatsapp ?? c.phone, c.email].filter(Boolean).join(" · ") || "Contato não informado"}
@@ -45,6 +46,11 @@ export default async function ClientPage({ params }: { params: Params }) {
         }
       />
 
+      {passportAlert && (
+        <Notice tone="amber" title={passportAlert === "VENCIDO" ? "Passaporte vencido" : "Passaporte vence em menos de 6 meses"} className="mb-6">
+          Validade: {formatDate(c.passportExpiry)}. Muitos destinos exigem 6 meses de validade na data da viagem.
+        </Notice>
+      )}
       <Card className="mb-6 grid grid-cols-2 gap-5 p-5 md:grid-cols-5">
         <Stat label="Compras" value={String(stats.count)} />
         <Stat label="Total comprado" value={formatBRL(stats.totalCents)} />
@@ -91,6 +97,36 @@ export default async function ClientPage({ params }: { params: Params }) {
               </Table>
             )}
           </Card>
+          {(trips.length > 0 || asPassenger.length > 0) && (
+            <Card>
+              <CardHeader title="Viagens" icon={Map} description="Vendas agrupadas por viagem e viagens como passageiro" />
+              <ul className="divide-y divide-line">
+                {trips.map((tr) => (
+                  <li key={tr.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
+                    <Link href={`/viagens/${tr.id}`} className="min-w-0">
+                      <span className="block truncate font-medium text-ink hover:text-brand-700">{tr.title}</span>
+                      <span className="block text-xs text-muted">
+                        {tr.code} · {tr.sales.length} venda(s){tr.start && ` · ${formatDate(tr.start)}`}
+                      </span>
+                    </Link>
+                    <TripStatusBadge s={tr.status} />
+                  </li>
+                ))}
+                {asPassenger.map((pp) => (
+                  <li key={pp.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
+                    <Link href={`/vendas/${pp.sale.id}`} className="min-w-0">
+                      <span className="block truncate font-medium text-ink hover:text-brand-700">{pp.sale.destination ?? pp.sale.code}</span>
+                      <span className="block text-xs text-muted">
+                        passageiro na venda {pp.sale.code} de {pp.sale.client.name}
+                        {pp.sale.tripStart && ` · ${formatDate(pp.sale.tripStart)}`}
+                      </span>
+                    </Link>
+                    <SaleStatusBadge s={pp.sale.status} />
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           <Card>
             <CardHeader title="Pagamentos e pendências" />
             {receivables.length === 0 ? (
@@ -111,6 +147,7 @@ export default async function ClientPage({ params }: { params: Params }) {
                     <tr key={r.id}>
                       <Td>{formatDate(r.dueDate)}</Td>
                       <Td className="max-w-72 truncate">
+                        {r.sale && r.sale.clientId !== c.id && <Badge className="mr-1">pagante</Badge>}
                         {can(ctx, "finance.view") ? (
                           <Link className="hover:text-brand-700" href={`/financeiro/receber?abrir=${r.id}`}>
                             {r.description}
@@ -158,6 +195,33 @@ export default async function ClientPage({ params }: { params: Params }) {
                 <dt className="text-xs text-muted">Nascimento</dt>
                 <dd>{formatDate(c.birthDate)}</dd>
               </div>
+              {(c.rg || c.passportNumber || c.specialNeeds) && (
+                <div>
+                  <dt className="flex items-center gap-1 text-xs text-muted">
+                    <IdCard className="h-3.5 w-3.5" /> Documentos de viagem
+                  </dt>
+                  <dd className="space-y-0.5">
+                    {c.rg && <p>RG ••••{c.rg.slice(-3)}</p>}
+                    {c.passportNumber && (
+                      <p>
+                        Passaporte {maskPassport(c.passportNumber)}
+                        {c.passportExpiry && ` · val. ${formatDate(c.passportExpiry)}`}
+                      </p>
+                    )}
+                    {c.specialNeeds && (
+                      <p className="flex items-center gap-1 text-amber-800">
+                        <AlertTriangle className="h-3.5 w-3.5" /> {c.specialNeeds}
+                      </p>
+                    )}
+                  </dd>
+                </div>
+              )}
+              {c.tradeName && (
+                <div>
+                  <dt className="text-xs text-muted">Nome fantasia</dt>
+                  <dd>{c.tradeName}</dd>
+                </div>
+              )}
               <div>
                 <dt className="text-xs text-muted">Destinos já adquiridos</dt>
                 <dd className="mt-1 flex flex-wrap gap-1">{stats.destinations.length ? stats.destinations.map((d) => <Badge key={d}>{d}</Badge>) : "—"}</dd>

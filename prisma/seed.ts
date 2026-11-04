@@ -8,7 +8,11 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "../src/server/db";
 import { loadContext, type Ctx } from "../src/server/context";
-import { createSale, cancelSale } from "../src/server/services/sales";
+import { createSale, cancelSale, registerRefund } from "../src/server/services/sales";
+import { createTrip } from "../src/server/services/trips";
+import { saveExcursion, addExcursionCost } from "../src/server/services/excursions";
+import { createInvoice, addPayablesToInvoice } from "../src/server/services/invoices";
+import { saveCostCenter, saveCommissionRule } from "../src/server/services/catalog";
 import { createManualPayable, settleEntry, createTransfer } from "../src/server/services/finance";
 import { todayIn, addDays, addMonths, startOfMonth } from "../src/lib/dates";
 import { splitInstallments } from "../src/lib/money";
@@ -84,7 +88,7 @@ async function main() {
   const cFin = await ctx(fin.id);
   const sellers = [await ctx(ana.id), await ctx(carlos.id), await ctx(gestora.id)];
 
-  const bank = await prisma.financialAccount.create({ data: { companyId: company.id, name: "Banco (exemplo) — conta corrente", type: "BANCO", bankName: "Banco Exemplo", initialBalanceCents: 2500000 } });
+  const bank = await prisma.financialAccount.create({ data: { companyId: company.id, name: "Banco (exemplo) — conta corrente", type: "BANCO", bankName: "Banco Exemplo", initialBalanceCents: 15000000 } });
   const cash = await prisma.financialAccount.create({ data: { companyId: company.id, name: "Caixa da loja", type: "CAIXA", initialBalanceCents: 150000 } });
   const cards = await prisma.financialAccount.create({ data: { companyId: company.id, name: "Recebíveis de cartão", type: "RECEBIVEIS" } });
 
@@ -96,6 +100,7 @@ async function main() {
     "Receptivo Bonito Natureza (exemplo)": "RECEPTIVO",
     "Seguro Viagem Protege (exemplo)": "SEGURADORA",
     "Transfer Express (exemplo)": "TRANSPORTADORA",
+    "Parceira Juliana Freelancer (exemplo)": "INTERMEDIARIO",
   };
   const suppliers: Record<string, string> = {};
   for (const [name, category] of Object.entries(supplierCat)) {
@@ -132,6 +137,14 @@ async function main() {
   }
 
   await seedTemplates(company.id);
+
+  // ------------------------------------------------------------- Cadastros auxiliares
+  const ccLoja = await saveCostCenter(cAdmin, null, { name: "Loja física" });
+  const ccMkt = await saveCostCenter(cAdmin, null, { name: "Marketing digital" });
+  await saveCostCenter(cAdmin, null, { name: "Excursões e grupos" });
+  await saveCommissionRule(cAdmin, null, { supplierId: suppliers["Cruzeiros Atlântico (exemplo)"], productType: "CRUZEIRO", description: "Tarifa pública", commissionBps: 1200, overBps: 100 });
+  await saveCommissionRule(cAdmin, null, { supplierId: suppliers["Operadora Horizonte Turismo (exemplo)"], productType: null, description: "Acordo anual", commissionBps: 0, overBps: 150 });
+  await saveCommissionRule(cAdmin, null, { supplierId: null, productType: "SEGURO", description: "Seguradoras em geral", commissionBps: 3000, overBps: 0 });
 
   // ------------------------------------------------------------- Vendas (12 meses)
   let created = 0;
@@ -212,6 +225,97 @@ async function main() {
     confirm: true,
   });
 
+  // ------------------------------------------------------------- Viagem com várias vendas (aéreo + hotel + seguro), RAV/DU, over, pagante e intermediário
+  const lisboaClient = await prisma.client.create({
+    data: { companyId: company.id, name: "Roberto Viajante Exemplo", document: cpf(), whatsapp: "(42) 99888-7766", email: "roberto@email.exemplo", street: "Rua das Flores", number: "45", district: "Batel", city: "Guarapuava", state: "PR", zipCode: "85010-100", passportNumber: "FX123456", passportExpiry: addMonths(TODAY, 4), consentMessaging: true, ownerId: ana.id },
+  });
+  const payerCompany = await prisma.client.create({
+    data: { companyId: company.id, personType: "PJ", name: "Construtora Exemplo Ltda", tradeName: "Construtora Exemplo", document: "11444777000161", email: "financeiro@construtora.exemplo", city: "Guarapuava", state: "PR", ownerId: ana.id },
+  });
+  const lisboa = await createTrip(sellers[0], { clientId: lisboaClient.id, title: "Férias em Lisboa (exemplo)", destination: "Lisboa - Portugal" });
+  const lisboaStart = addDays(TODAY, 75);
+  await createSale(sellers[0], {
+    saleDate: addDays(TODAY, -20),
+    clientId: lisboaClient.id,
+    tripId: lisboa.id,
+    destination: "Lisboa - Portugal",
+    tripStart: lisboaStart,
+    tripEnd: addDays(lisboaStart, 12),
+    passengerCount: 2,
+    locator: "TAPX7Q",
+    commission: { mode: "VALOR", amountCents: 15000 },
+    items: [
+      { productType: "AEREO", description: "GRU–LIS ida e volta, 2 adultos", supplierId: suppliers["Consolidadora Rota Brasil (exemplo)"], commercialModel: "COMISSAO", priceCents: 980000, supplierCommissionCents: 0, ravCents: 30000, duCents: 16000, cardFeeCents: 2000, locator: "TAPX7Q" },
+    ],
+    payments: [],
+    passengers: [{ name: "Roberto Viajante Exemplo", clientId: lisboaClient.id, passportNumber: "FX123456", passportExpiry: addMonths(TODAY, 4) }, { name: "Clara Viajante Exemplo" }],
+    confirm: true,
+  });
+  await createSale(sellers[0], {
+    saleDate: addDays(TODAY, -12),
+    clientId: lisboaClient.id,
+    tripId: lisboa.id,
+    destination: "Lisboa - Portugal",
+    tripStart: lisboaStart,
+    tripEnd: addDays(lisboaStart, 12),
+    passengerCount: 2,
+    locator: "HTL-LIS-889",
+    intermediaryId: suppliers["Parceira Juliana Freelancer (exemplo)"],
+    intermediaryCommissionCents: 25000,
+    commission: { mode: "PERCENTUAL", bps: 1000 },
+    items: [
+      { productType: "HOTEL", description: "Hotel boutique Alfama, 12 noites", supplierId: suppliers["Rede Hotéis Mar Azul (exemplo)"], operatorId: suppliers["Operadora Horizonte Turismo (exemplo)"], commercialModel: "INTERMEDIACAO", priceCents: 1450000, costCents: 1190000, overCents: 17850, supplierDueDate: addDays(TODAY, 30) },
+      { productType: "SEGURO", description: "Seguro viagem Europa (Schengen)", supplierId: suppliers["Seguro Viagem Protege (exemplo)"], commercialModel: "INTERMEDIACAO", priceCents: 64000, costCents: 44800 },
+    ],
+    payments: [
+      { key: "lis-1", dueDate: addDays(TODAY, -12), amountCents: 514000, method: "PIX" },
+      { key: "lis-2", dueDate: addDays(TODAY, 18), amountCents: 500000, method: "BOLETO", payerClientId: payerCompany.id },
+      { key: "lis-3", dueDate: addDays(TODAY, 48), amountCents: 500000, method: "BOLETO", payerClientId: payerCompany.id },
+    ],
+    passengers: [{ name: "Roberto Viajante Exemplo", clientId: lisboaClient.id }, { name: "Clara Viajante Exemplo" }],
+    confirm: true,
+  });
+
+  // ------------------------------------------------------------- Excursão (operação própria)
+  const exc = await saveExcursion(cAdmin, null, {
+    name: "Beto Carrero World — feriado (exemplo)",
+    destination: "Penha - SC",
+    startDate: addDays(TODAY, 24),
+    endDate: addDays(TODAY, 27),
+    seats: 40,
+    pricePerSeatCents: 89000,
+    status: "VENDAS_ABERTAS",
+    notes: "Saída da praça central às 22h. Ônibus leito executivo. Hotel com café da manhã.",
+  });
+  const groupPeople = [
+    { pax: 2, names: ["Família Ribeiro — adulto", "Família Ribeiro — criança"], rooms: ["101", "101"] },
+    { pax: 3, names: ["Grupo Almeida 1", "Grupo Almeida 2", "Grupo Almeida 3"], rooms: ["102", "102", "102"] },
+    { pax: 1, names: ["Viajante Solo Exemplo"], rooms: ["103"] },
+    { pax: 4, names: [], rooms: [] },
+  ];
+  for (const [gi, gp] of groupPeople.entries()) {
+    const cl = clients[gi + 3];
+    const total = 89000 * gp.pax;
+    await createSale(sellers[gi % 2], {
+      saleDate: addDays(TODAY, -10 + gi),
+      clientId: cl.id,
+      excursionId: exc.id,
+      destination: "Penha - SC",
+      tripStart: addDays(TODAY, 24),
+      tripEnd: addDays(TODAY, 27),
+      passengerCount: gp.pax,
+      locator: `EXC-${gi + 1}`,
+      commission: { mode: "PERCENTUAL", bps: 500 },
+      items: [{ productType: "EXCURSAO", description: "Beto Carrero World — feriado", commercialModel: "REVENDA", priceCents: total, costCents: 0 }],
+      payments: splitInstallments(total, 2).map((a, i) => ({ key: `exc-${gi}-${i}`, dueDate: addDays(TODAY, -10 + gi + i * 15), amountCents: a, method: "PIX" })),
+      passengers: gp.names.map((n, i) => ({ name: n, room: gp.rooms[i], seat: String(gi * 4 + i + 1) })),
+      confirm: true,
+    });
+  }
+  await addExcursionCost(cAdmin, exc.id, { description: "Fretamento ônibus leito", supplierId: suppliers["Transfer Express (exemplo)"], amountCents: 520000, dueDate: addDays(TODAY, 20) });
+  await addExcursionCost(cAdmin, exc.id, { description: "Hospedagem 3 noites (bloqueio)", supplierId: suppliers["Rede Hotéis Mar Azul (exemplo)"], amountCents: 900000, dueDate: addDays(TODAY, 15) });
+  await addExcursionCost(cAdmin, exc.id, { description: "Ingressos do parque", amountCents: 450000, dueDate: addDays(TODAY, 22) });
+
   // ------------------------------------------------------------- Despesas operacionais recorrentes
   const firstMonth = addMonths(startOfMonth(TODAY), -11);
   for (const e of [
@@ -221,7 +325,7 @@ async function main() {
     { description: "Marketing digital", category: "MARKETING", amountCents: 120000, day: 20 },
     { description: "Contabilidade", category: "ADMINISTRATIVAS", amountCents: 60000, day: 12 },
   ]) {
-    await createManualPayable(cFin, { description: e.description, category: e.category, amountCents: e.amountCents, firstDueDate: `${firstMonth.slice(0, 8)}${String(e.day).padStart(2, "0")}`, recurringMonths: 14, method: "TRANSFERENCIA" });
+    await createManualPayable(cFin, { description: e.description, category: e.category, amountCents: e.amountCents, firstDueDate: `${firstMonth.slice(0, 8)}${String(e.day).padStart(2, "0")}`, recurringMonths: 14, method: "TRANSFERENCIA", costCenterId: e.category === "MARKETING" ? ccMkt : ccLoja });
   }
   await createManualPayable(cFin, { description: "Impostos (Simples Nacional)", category: "IMPOSTOS", amountCents: 180000, firstDueDate: addDays(TODAY, -3), method: "BOLETO" });
 
@@ -244,6 +348,24 @@ async function main() {
   }
   await createTransfer(cFin, { fromAccountId: cards.id, toAccountId: bank.id, amountCents: 500000, date: addDays(TODAY, -15), description: "Antecipação de recebíveis (exemplo)" });
   await createTransfer(cFin, { fromAccountId: cash.id, toAccountId: bank.id, amountCents: 80000, date: addDays(TODAY, -7), description: "Depósito do caixa" });
+
+  // ------------------------------------------------------------- Fatura de operadora (consolida custos já existentes)
+  const horizonte = suppliers["Operadora Horizonte Turismo (exemplo)"];
+  const openCosts = await prisma.payable.findMany({ where: { companyId: company.id, supplierId: horizonte, status: "PENDENTE", invoiceId: null, dueDate: { gt: TODAY } }, orderBy: { dueDate: "asc" }, take: 4 });
+  if (openCosts.length) {
+    const sumCosts = openCosts.reduce((a, x) => a + x.amountCents, 0);
+    const invId = await createInvoice(cFin, { supplierId: horizonte, number: "HZ-2026-0457", issueDate: TODAY, dueDate: addDays(TODAY, 12), declaredCents: sumCosts + 3500, notes: "Fatura quinzenal (exemplo). Inclui R$ 35,00 de taxa administrativa ainda não lançada." });
+    await addPayablesToInvoice(cFin, invId, openCosts.map((x) => x.id));
+  }
+
+  // ------------------------------------------------------------- Reembolso e multa em venda cancelada
+  const cancelled = await prisma.sale.findFirst({ where: { companyId: company.id, status: "CANCELADA", receivables: { some: { settledCents: { gt: 0 } } } }, include: { receivables: true, items: true } });
+  if (cancelled) {
+    const paid = cancelled.receivables.reduce((a, x) => a + x.settledCents, 0);
+    const fine = Math.round(paid * 0.2);
+    await registerRefund(cFin, cancelled.id, { kind: "MULTA_CLIENTE", amountCents: fine, dueDate: addDays(TODAY, -1), description: "Retenção de 20% conforme contrato (exemplo)", requestKey: "seed-multa" });
+    await registerRefund(cFin, cancelled.id, { kind: "REEMBOLSO_CLIENTE", amountCents: paid - fine, dueDate: addDays(TODAY, 5), description: "Devolução do valor pago menos a multa (exemplo)", requestKey: "seed-reembolso" });
+  }
 
   await prisma.automationSetting.createMany({
     data: [

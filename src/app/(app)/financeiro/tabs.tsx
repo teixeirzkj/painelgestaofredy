@@ -5,8 +5,9 @@ import { Tabs } from "@/components/ui";
 const ITEMS = [
   { key: "receber", href: "/financeiro/receber", label: "Contas a receber" },
   { key: "pagar", href: "/financeiro/pagar", label: "Contas a pagar" },
+  { key: "faturas", href: "/financeiro/faturas", label: "Faturas de fornecedores" },
   { key: "fluxo", href: "/financeiro/fluxo", label: "Fluxo de caixa" },
-  { key: "contas", href: "/financeiro/contas", label: "Contas e transferências" },
+  { key: "contas", href: "/financeiro/contas", label: "Contas financeiras" },
   { key: "conciliacao", href: "/financeiro/conciliacao", label: "Conciliação" },
 ];
 

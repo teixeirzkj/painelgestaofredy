@@ -1,44 +1,40 @@
 import Link from "next/link";
-import { ArrowDownRight, ArrowUpRight, AlertCircle, AlertTriangle, Info, ChevronRight, ShieldAlert } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  ChevronRight,
+  ShieldAlert,
+  TrendingUp,
+  Landmark,
+  PiggyBank,
+  Percent,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Wallet,
+  ShoppingBag,
+  Plane,
+  FileSignature,
+  CalendarClock,
+  Receipt,
+} from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { getDashboard } from "@/server/services/dashboard";
 import { sellerOptions } from "@/server/services/settings";
-import { Card, CardHeader, PageHeader } from "@/components/ui";
+import { Card, CardHeader, KpiCard, PageHeader, SectionTitle, Notice } from "@/components/ui";
 import { FilterForm, FilterSelect, PeriodSelect } from "@/components/filter-form";
 import { BarList, CashChart, MarginChart, SalesEvolutionChart } from "@/components/charts";
+import { ContractStatusBadge, SaleStatusBadge } from "@/components/status";
 import { formatBRL, formatPercentBps, ratioBps } from "@/lib/money";
 import { formatDate, resolvePeriod } from "@/lib/dates";
-import { PRODUCT_TYPES, SALE_STATUS } from "@/lib/constants";
+import { PAYABLE_CATEGORIES, PRODUCT_TYPES, SALE_STATUS } from "@/lib/constants";
 import { str, type SearchParams } from "@/lib/params";
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Dashboard" };
 
-function Delta({ cur, prev, invert }: { cur: number; prev: number; invert?: boolean }) {
-  if (!prev) return <span className="text-xs text-muted">sem base anterior</span>;
-  const bps = ratioBps(cur - prev, Math.abs(prev));
-  const up = bps >= 0;
-  const good = invert ? !up : up;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
-  return (
-    <span className={cn("inline-flex items-center gap-0.5 text-xs font-medium", good ? "text-success" : "text-danger")}>
-      <Icon className="h-3.5 w-3.5" />
-      {formatPercentBps(Math.abs(bps))} <span className="font-normal text-muted">vs. anterior</span>
-    </span>
-  );
-}
-
-function Kpi({ label, value, footer, tone, href }: { label: string; value: string; footer?: React.ReactNode; tone?: "danger"; href?: string }) {
-  const body = (
-    <Card className={cn("h-full p-4 transition-shadow", href && "hover:shadow-md")}>
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className={cn("mt-1.5 truncate text-xl font-semibold tabular tracking-tight", tone === "danger" ? "text-danger" : "text-ink")}>{value}</p>
-      <div className="mt-1 min-h-4">{footer}</div>
-    </Card>
-  );
-  return href ? <Link href={href}>{body}</Link> : body;
-}
+const delta = (cur: number, prev: number | null | undefined, inverse = false) => (prev ? { bps: ratioBps(cur - prev, Math.abs(prev)), label: "vs. período anterior", inverse } : { bps: null, label: "sem base anterior" });
 
 export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
   const ctx = await requirePageContext("dashboard.view");
@@ -50,6 +46,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const k = d.kpis;
   const p = d.previous;
   const f = d.finance;
+  const L = d.lists;
 
   const alertIcon = { danger: AlertCircle, warning: AlertTriangle, info: Info };
   const alertTone = { danger: "text-danger bg-red-50", warning: "text-amber-700 bg-amber-50", info: "text-brand-700 bg-brand-50" };
@@ -58,19 +55,23 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     <>
       <PageHeader
         title={`Olá, ${ctx.userName.split(" ")[0]}`}
-        description={`Visão geral de ${formatDate(period.from)} a ${formatDate(period.to)}${d.financial ? "" : " · suas vendas"}`}
+        description={`Central de gestão · ${formatDate(period.from)} a ${formatDate(period.to)}${d.financial ? "" : " · suas vendas"}`}
       />
       {sp.negado && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-          <ShieldAlert className="h-4 w-4" /> Seu perfil não tem acesso à página solicitada.
+        <div className="mb-5">
+          <Notice tone="amber" title="Acesso restrito">
+            <span className="inline-flex items-center gap-1">
+              <ShieldAlert className="h-3.5 w-3.5" /> Seu perfil não tem acesso à página solicitada.
+            </span>
+          </Notice>
         </div>
       )}
 
-      <Card className="mb-6 p-3">
+      <Card className="mb-6 px-4 py-3">
         <FilterForm>
           <PeriodSelect preset={period.preset} from={period.from} to={period.to} />
           {sellers.length > 0 && <FilterSelect name="vendedor" label="Vendedor" value={filters.sellerId} options={sellers.map((s) => ({ value: s.id, label: s.name }))} />}
-          <FilterSelect name="categoria" label="Categoria" value={filters.productType} options={PRODUCT_TYPES.values.map((v) => ({ value: v, label: PRODUCT_TYPES.label(v) }))} all="Todas" />
+          <FilterSelect name="categoria" label="Produto" value={filters.productType} options={PRODUCT_TYPES.values.map((v) => ({ value: v, label: PRODUCT_TYPES.label(v) }))} all="Todos" />
           <FilterSelect
             name="status"
             label="Status da venda"
@@ -81,48 +82,58 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         </FilterForm>
       </Card>
 
-      <section aria-label="Indicadores" className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <Kpi label="Total vendido" value={formatBRL(k.grossCents)} footer={<Delta cur={k.grossCents} prev={p.grossCents} />} href="/vendas" />
-        <Kpi label="Quantidade de vendas" value={String(k.count)} footer={<Delta cur={k.count} prev={p.count} />} />
-        <Kpi label="Ticket médio" value={formatBRL(k.ticketCents)} footer={<Delta cur={k.ticketCents} prev={p.ticketCents} />} />
-        {k.agencyRevenueCents !== null && <Kpi label="Receita da agência" value={formatBRL(k.agencyRevenueCents)} footer={<Delta cur={k.agencyRevenueCents} prev={p.agencyRevenueCents ?? 0} />} />}
-        {k.grossProfitCents !== null && <Kpi label="Lucro bruto estimado" value={formatBRL(k.grossProfitCents)} footer={<Delta cur={k.grossProfitCents} prev={p.grossProfitCents ?? 0} />} />}
-        {k.marginBps !== null && <Kpi label="Margem de lucro" value={formatPercentBps(k.marginBps)} footer={<span className="text-xs text-muted">lucro ÷ faturamento</span>} />}
-        <Kpi label={d.financial ? "Comissões de vendedores" : "Suas comissões"} value={formatBRL(k.sellerCommissionCents)} footer={f ? <span className="text-xs text-muted">{formatBRL(f.commissionsPendingCents)} pendentes (total)</span> : undefined} />
+      <section aria-label="Indicadores principais" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Total vendido" value={formatBRL(k.grossCents)} icon={TrendingUp} delta={delta(k.grossCents, p.grossCents)} href="/vendas" />
+        {k.agencyRevenueCents !== null ? (
+          <KpiCard label="Receita da agência" value={formatBRL(k.agencyRevenueCents)} icon={Landmark} tone="violet" delta={delta(k.agencyRevenueCents, p.agencyRevenueCents)} />
+        ) : (
+          <KpiCard label="Ticket médio" value={formatBRL(k.ticketCents)} icon={Receipt} tone="violet" delta={delta(k.ticketCents, p.ticketCents)} />
+        )}
+        {k.grossProfitCents !== null ? (
+          <KpiCard label="Lucro bruto" value={formatBRL(k.grossProfitCents)} icon={PiggyBank} tone="green" delta={delta(k.grossProfitCents, p.grossProfitCents)} />
+        ) : (
+          <KpiCard label={d.financial ? "Comissões de vendedores" : "Suas comissões"} value={formatBRL(k.sellerCommissionCents)} icon={PiggyBank} tone="green" />
+        )}
+        {k.marginBps !== null ? (
+          <KpiCard label="Margem" value={formatPercentBps(k.marginBps)} icon={Percent} tone="amber" hint="lucro bruto ÷ total vendido" />
+        ) : (
+          <KpiCard label="Vendas realizadas" value={String(k.count)} icon={ShoppingBag} tone="amber" delta={delta(k.count, p.count)} />
+        )}
         {f && (
           <>
-            <Kpi label="A receber no período" value={formatBRL(f.receivableCents)} footer={<span className="text-xs text-muted">recebido: {formatBRL(f.receivedCents)}</span>} href="/financeiro/receber?status=ABERTO" />
-            <Kpi label="A pagar no período" value={formatBRL(f.payableCents)} footer={<span className="text-xs text-muted">pago: {formatBRL(f.paidCents)}</span>} href="/financeiro/pagar?status=ABERTO" />
-            <Kpi
-              label="Valores vencidos"
-              value={formatBRL(f.overdueReceivableCents + f.overduePayableCents)}
-              tone={f.overdueReceivableCents + f.overduePayableCents > 0 ? "danger" : undefined}
-              footer={
-                <span className="text-xs text-muted">
-                  receber {formatBRL(f.overdueReceivableCents)} · pagar {formatBRL(f.overduePayableCents)}
-                </span>
-              }
-              href="/financeiro/receber?status=VENCIDO"
-            />
+            <KpiCard label="Contas a receber" value={formatBRL(f.receivableCents)} icon={ArrowDownToLine} hint={`no período · recebido ${formatBRL(f.receivedCents)}`} href="/financeiro/receber?status=ABERTO" />
+            <KpiCard label="Contas a pagar" value={formatBRL(f.payableCents)} icon={ArrowUpFromLine} tone="red" hint={`no período · pago ${formatBRL(f.paidCents)}`} href="/financeiro/pagar?status=ABERTO" />
+            <KpiCard label="Saldo financeiro" value={formatBRL(f.balanceCents)} icon={Wallet} tone="slate" hint="soma das contas ativas hoje" href="/financeiro/contas" />
+            <KpiCard label="Vendas realizadas" value={String(k.count)} icon={ShoppingBag} tone="blue" delta={delta(k.count, p.count)} hint={`ticket ${formatBRL(k.ticketCents)}`} />
           </>
         )}
       </section>
 
+      {f && f.overdueReceivableCents + f.overduePayableCents > 0 && (
+        <Link href="/relatorios?r=contas-vencidas" className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-red-200 bg-red-50/60 px-4 py-2.5 text-sm text-red-900 transition-colors hover:bg-red-50">
+          <AlertCircle className="h-4 w-4 text-danger" />
+          <span className="font-medium">Valores em atraso</span>
+          <span>a receber {formatBRL(f.overdueReceivableCents)}</span>
+          <span>a pagar {formatBRL(f.overduePayableCents)}</span>
+          <ChevronRight className="ml-auto h-4 w-4" />
+        </Link>
+      )}
+
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <CardHeader title="Evolução das vendas" description="Faturamento mensal dos últimos 12 meses" />
+          <CardHeader title="Evolução das vendas" description="Total vendido por mês · últimos 12 meses" />
           <div className="p-4">
             <SalesEvolutionChart data={d.evolution} />
           </div>
         </Card>
         <Card>
-          <CardHeader title="Atenção" description="Itens que precisam de ação" />
+          <CardHeader title="Alertas operacionais" description="O que precisa de ação agora" />
           <div className="divide-y divide-line">
             {d.alerts.length === 0 && <p className="px-5 py-10 text-center text-sm text-muted">Tudo em dia. Nenhuma pendência encontrada.</p>}
             {d.alerts.map((a) => {
               const Icon = alertIcon[a.severity];
               return (
-                <Link key={a.key} href={a.href} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50">
+                <Link key={a.key} href={a.href} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
                   <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", alertTone[a.severity])}>
                     <Icon className="h-4 w-4" />
                   </span>
@@ -134,33 +145,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
                     </span>
                   </span>
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold tabular text-slate-700">{a.count}</span>
-                  <ChevronRight className="h-4 w-4 text-slate-300" />
                 </Link>
               );
             })}
-          </div>
-        </Card>
-      </div>
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        {d.bySeller.length > 0 && (
-          <Card>
-            <CardHeader title="Vendas por vendedor" description="Faturamento no período" />
-            <div className="p-5">
-              <BarList items={d.bySeller.map((s) => ({ label: s.key, valueCents: s.valueCents, sub: `· ${s.count}` }))} />
-            </div>
-          </Card>
-        )}
-        <Card>
-          <CardHeader title="Vendas por categoria" description="Valor vendido por tipo de produto" />
-          <div className="p-5">
-            <BarList items={d.byCategory.map((s) => ({ label: PRODUCT_TYPES.label(s.key), valueCents: s.valueCents }))} />
-          </div>
-        </Card>
-        <Card>
-          <CardHeader title="Destinos mais vendidos" description="Faturamento por destino" />
-          <div className="p-5">
-            <BarList items={d.byDestination.map((s) => ({ label: s.key, valueCents: s.valueCents, sub: `· ${s.count}` }))} />
           </div>
         </Card>
       </div>
@@ -169,7 +156,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           {f && (
             <Card>
-              <CardHeader title="Recebimentos e pagamentos" description="Valores efetivamente movimentados por mês" />
+              <CardHeader title="Fluxo de caixa" description="Recebimentos e pagamentos realizados por mês" action={<Link href="/financeiro/fluxo" className="text-xs font-medium text-brand-600 hover:underline">Ver fluxo completo</Link>} />
               <div className="p-4">
                 <CashChart data={f.cashSeries} />
               </div>
@@ -177,7 +164,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           )}
           {d.showMargin && (
             <Card>
-              <CardHeader title="Margem de lucro por mês" description="Lucro bruto ÷ faturamento das vendas do mês" />
+              <CardHeader title="Rentabilidade" description="Margem de lucro das vendas de cada mês" />
               <div className="p-4">
                 <MarginChart data={d.evolution} />
               </div>
@@ -185,6 +172,125 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           )}
         </div>
       )}
+
+      <div className="mt-6 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {d.bySeller.length > 0 && (
+          <Card>
+            <CardHeader title="Vendas por vendedor" description="Total vendido no período" />
+            <div className="p-5">
+              <BarList items={d.bySeller.map((s) => ({ label: s.key, valueCents: s.valueCents, sub: `· ${s.count}` }))} />
+            </div>
+          </Card>
+        )}
+        <Card>
+          <CardHeader title="Produtos mais vendidos" description="Itens vendidos por tipo de produto" />
+          <div className="p-5">
+            <BarList format="int" items={d.byProductCount.slice(0, 8).map((s) => ({ label: PRODUCT_TYPES.label(s.key), valueCents: s.valueCents, sub: `· ${formatBRL(d.byCategory.find((c) => c.key === s.key)?.valueCents ?? 0)}` }))} />
+          </div>
+        </Card>
+        {f ? (
+          <Card>
+            <CardHeader title="Despesas por categoria" description="Contas a pagar com vencimento no período (sem custos de vendas)" />
+            <div className="p-5">
+              <BarList items={f.expensesByCategory.slice(0, 8).map((s) => ({ label: PAYABLE_CATEGORIES.label(s.key), valueCents: s.valueCents }))} />
+            </div>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader title="Destinos mais vendidos" description="Total vendido por destino" />
+            <div className="p-5">
+              <BarList items={d.byDestination.map((s) => ({ label: s.key, valueCents: s.valueCents, sub: `· ${s.count}` }))} />
+            </div>
+          </Card>
+        )}
+      </div>
+
+      <SectionTitle>Acompanhamento</SectionTitle>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader title="Vendas recentes" icon={ShoppingBag} action={<Link href="/vendas" className="text-xs font-medium text-brand-600 hover:underline">Ver todas</Link>} />
+          <ul className="divide-y divide-line">
+            {L.recentSales.length === 0 && <li className="px-5 py-8 text-center text-sm text-muted">Nenhuma venda registrada.</li>}
+            {L.recentSales.map((s) => (
+              <li key={s.id}>
+                <Link href={`/vendas/${s.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">{s.client.name}</span>
+                    <span className="block truncate text-xs text-muted">
+                      {s.code} · {s.destination ?? "Sem destino"} · {formatDate(s.saleDate)}
+                    </span>
+                  </span>
+                  <SaleStatusBadge s={s.status} />
+                  <span className="w-28 text-right text-sm font-medium tabular text-ink">{formatBRL(s.grossCents)}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        <Card>
+          <CardHeader title="Próximas viagens" icon={Plane} action={<Link href="/vendas?viagem=proximas" className="text-xs font-medium text-brand-600 hover:underline">Ver todas</Link>} />
+          <ul className="divide-y divide-line">
+            {L.upcomingTrips.length === 0 && <li className="px-5 py-8 text-center text-sm text-muted">Nenhuma viagem agendada.</li>}
+            {L.upcomingTrips.map((s) => (
+              <li key={s.id}>
+                <Link href={`/vendas/${s.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                  <span className="flex w-12 shrink-0 flex-col items-center rounded-lg bg-brand-50 py-1 text-brand-700">
+                    <span className="text-sm font-semibold leading-none">{s.tripStart!.slice(8, 10)}</span>
+                    <span className="text-[10px] uppercase">{new Date(`${s.tripStart}T12:00:00`).toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")}</span>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">{s.destination ?? "Destino não informado"}</span>
+                    <span className="block truncate text-xs text-muted">
+                      {s.client.name} · {s.passengerCount} passageiro(s) · {s.code}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        {L.dueReceivables.length > 0 && (
+          <Card>
+            <CardHeader title="Pendências financeiras" description="Recebimentos vencidos ou que vencem em 7 dias" icon={CalendarClock} action={<Link href="/financeiro/receber?status=ABERTO" className="text-xs font-medium text-brand-600 hover:underline">Contas a receber</Link>} />
+            <ul className="divide-y divide-line">
+              {L.dueReceivables.map((r) => (
+                <li key={r.id}>
+                  <Link href={`/financeiro/receber?abrir=${r.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-ink">{r.client?.name ?? r.description}</span>
+                      <span className="block truncate text-xs text-muted">{r.description}</span>
+                    </span>
+                    <span className={cn("text-xs font-medium", r.overdue ? "text-danger" : "text-muted")}>{r.overdue ? "venceu " : "vence "}{formatDate(r.dueDate)}</span>
+                    <span className="w-28 text-right text-sm font-medium tabular text-ink">{formatBRL(r.balanceCents)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+        {can(ctx, "contracts.manage") && (
+          <Card>
+            <CardHeader title="Contratos pendentes" icon={FileSignature} action={<Link href="/contratos" className="text-xs font-medium text-brand-600 hover:underline">Ver contratos</Link>} />
+            <ul className="divide-y divide-line">
+              {L.pendingContracts.length === 0 && <li className="px-5 py-8 text-center text-sm text-muted">Nenhum contrato pendente.</li>}
+              {L.pendingContracts.map((c) => (
+                <li key={c.id}>
+                  <Link href={`/contratos/${c.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-ink">{c.sale.client.name}</span>
+                      <span className="block truncate text-xs text-muted">
+                        {c.sale.code}
+                        {c.missing > 0 && ` · ${c.missing} dado(s) obrigatório(s) faltando`}
+                      </span>
+                    </span>
+                    <ContractStatusBadge s={c.status} />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+      </div>
     </>
   );
 }

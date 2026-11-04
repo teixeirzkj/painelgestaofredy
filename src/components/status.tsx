@@ -1,5 +1,5 @@
 import { Badge, type Tone } from "./ui";
-import { CONTRACT_STATUS, ENTRY_STATUS, FINANCIAL_STATUS, SALE_STATUS, EVENT_STATUS, RESERVATION_STATUS } from "@/lib/constants";
+import { CONTRACT_STATUS, ENTRY_STATUS, FINANCIAL_STATUS, SALE_STATUS, EVENT_STATUS, RESERVATION_STATUS, TRIP_STATUS, EXCURSION_STATUS, INVOICE_STATUS } from "@/lib/constants";
 
 const saleTone: Record<string, Tone> = { ORCAMENTO: "gray", CONFIRMADA: "blue", CONCLUIDA: "green", CANCELADA: "red" };
 const entryTone: Record<string, Tone> = { PENDENTE: "amber", PARCIAL: "violet", PAGO: "green", VENCIDO: "red", CANCELADO: "gray" };
@@ -8,11 +8,18 @@ const contractTone: Record<string, Tone> = { NAO_GERADO: "gray", EM_PREPARACAO: 
 const eventTone: Record<string, Tone> = { PENDENTE: "amber", ENTREGUE: "green", SEM_DESTINO: "gray", FALHOU: "red", IGNORADO: "gray" };
 const resTone: Record<string, Tone> = { PENDENTE: "amber", CONFIRMADA: "green", CANCELADA: "gray" };
 
-export const SaleStatusBadge = ({ s }: { s: string }) => <Badge tone={saleTone[s] ?? "gray"}>{SALE_STATUS.label(s)}</Badge>;
+export const SaleStatusBadge = ({ s }: { s: string }) => <Badge dot tone={saleTone[s] ?? "gray"}>{SALE_STATUS.label(s)}</Badge>;
 export const EntryStatusBadge = ({ s, kind = "receivable" }: { s: string; kind?: "receivable" | "payable" }) => (
-  <Badge tone={entryTone[s] ?? "gray"}>{s === "PAGO" && kind === "receivable" ? "Recebido" : ENTRY_STATUS.label(s)}</Badge>
+  <Badge dot tone={entryTone[s] ?? "gray"}>{s === "PAGO" && kind === "receivable" ? "Recebido" : ENTRY_STATUS.label(s)}</Badge>
 );
-export const FinancialStatusBadge = ({ s }: { s: string }) => <Badge tone={finTone[s] ?? "gray"}>{FINANCIAL_STATUS.label(s)}</Badge>;
-export const ContractStatusBadge = ({ s }: { s: string }) => <Badge tone={contractTone[s] ?? "gray"}>{CONTRACT_STATUS.label(s)}</Badge>;
-export const EventStatusBadge = ({ s }: { s: string }) => <Badge tone={eventTone[s] ?? "gray"}>{EVENT_STATUS.label(s)}</Badge>;
-export const ReservationStatusBadge = ({ s }: { s: string }) => <Badge tone={resTone[s] ?? "gray"}>{RESERVATION_STATUS.label(s)}</Badge>;
+export const FinancialStatusBadge = ({ s }: { s: string }) => <Badge dot tone={finTone[s] ?? "gray"}>{FINANCIAL_STATUS.label(s)}</Badge>;
+export const ContractStatusBadge = ({ s }: { s: string }) => <Badge dot tone={contractTone[s] ?? "gray"}>{CONTRACT_STATUS.label(s)}</Badge>;
+export const EventStatusBadge = ({ s }: { s: string }) => <Badge dot tone={eventTone[s] ?? "gray"}>{EVENT_STATUS.label(s)}</Badge>;
+export const ReservationStatusBadge = ({ s }: { s: string }) => <Badge dot tone={resTone[s] ?? "gray"}>{RESERVATION_STATUS.label(s)}</Badge>;
+
+const tripTone: Record<string, Tone> = { SEM_DATAS: "gray", A_INICIAR: "blue", EM_VIAGEM: "violet", FINALIZADA: "green", CANCELADA: "gray" };
+const excTone: Record<string, Tone> = { PLANEJADA: "gray", VENDAS_ABERTAS: "blue", ENCERRADA: "amber", REALIZADA: "green", CANCELADA: "gray" };
+const invTone: Record<string, Tone> = { ABERTA: "amber", CONFERIDA: "blue", PAGA: "green", CANCELADA: "gray" };
+export const TripStatusBadge = ({ s }: { s: string }) => <Badge dot tone={tripTone[s] ?? "gray"}>{TRIP_STATUS.label(s)}</Badge>;
+export const ExcursionStatusBadge = ({ s }: { s: string }) => <Badge dot tone={excTone[s] ?? "gray"}>{EXCURSION_STATUS.label(s)}</Badge>;
+export const InvoiceStatusBadge = ({ s }: { s: string }) => <Badge dot tone={invTone[s] ?? "gray"}>{INVOICE_STATUS.label(s)}</Badge>;

@@ -15,9 +15,10 @@ import { addDays, addMonths, startOfMonth, startOfWeek } from "@/lib/dates";
 import { splitInstallments, sum } from "@/lib/money";
 import { newKey } from "@/lib/utils";
 import { emitEvent } from "./automations";
-import { refreshCommissionStatus } from "./sales";
+import { refreshCommissionStatus, saleScope } from "./sales";
+import { refreshInvoiceStatus } from "./invoices";
 import { textContains, entryDelegate } from "./query";
-import { PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
+import { ATTACHMENT_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 
 export type EntryKind = "receivable" | "payable";
 
@@ -33,8 +34,25 @@ export type EntryFilters = {
   from?: string;
   to?: string;
   category?: string;
+  costCenterId?: string;
+  supplierId?: string;
+  invoice?: "sem" | "com"; // contas a pagar fora/dentro de faturas de fornecedor
+  sort?: string; // venc_asc | venc_desc | valor_desc | valor_asc
   page?: number;
 };
+
+async function assertCostCenter(tx: Tx, ctx: Ctx, id: string | null | undefined) {
+  if (!id) return;
+  const cc = await tx.costCenter.findFirst({ where: { id, companyId: ctx.companyId } });
+  if (!cc) throw new AppError("Centro de custo inválido.");
+}
+
+function entryOrder(sort?: string): { dueDate?: "asc" | "desc"; amountCents?: "asc" | "desc"; createdAt?: "asc" }[] {
+  if (sort === "venc_desc") return [{ dueDate: "desc" }, { createdAt: "asc" }];
+  if (sort === "valor_desc") return [{ amountCents: "desc" }, { dueDate: "asc" }];
+  if (sort === "valor_asc") return [{ amountCents: "asc" }, { dueDate: "asc" }];
+  return [{ dueDate: "asc" }, { createdAt: "asc" }];
+}
 
 function statusWhere(status: string | undefined, t: string) {
   switch (status) {
@@ -61,6 +79,8 @@ export async function listReceivables(ctx: Ctx, f: EntryFilters) {
     companyId: ctx.companyId,
     ...sw,
     ...(f.category ? { category: f.category } : {}),
+    ...(f.costCenterId ? { costCenterId: f.costCenterId } : {}),
+    ...(f.supplierId ? { supplierId: f.supplierId } : {}),
     ...(f.from || f.to ? { dueDate: { ...(sw.dueDate ?? {}), ...(f.from ? { gte: f.from } : {}), ...(f.to ? { lte: f.to } : {}) } } : {}),
     ...(f.q
       ? { OR: [{ description: textContains(f.q) }, { client: { name: textContains(f.q) } }, { sale: { code: textContains(f.q) } }] }
@@ -70,13 +90,14 @@ export async function listReceivables(ctx: Ctx, f: EntryFilters) {
   const [items, total, agg] = await Promise.all([
     prisma.receivable.findMany({
       where,
-      orderBy: [{ dueDate: "asc" }, { createdAt: "asc" }],
+      orderBy: entryOrder(f.sort),
       skip: (page - 1) * 25,
       take: 25,
       include: {
         client: { select: { id: true, name: true } },
         supplier: { select: { id: true, name: true } },
         sale: { select: { id: true, code: true } },
+        costCenter: { select: { id: true, name: true } },
         settlements: { where: { reversedAt: null }, orderBy: { date: "desc" }, take: 1, select: { date: true, method: true } },
         _count: { select: { attachments: true } },
       },
@@ -103,23 +124,29 @@ export async function listPayables(ctx: Ctx, f: EntryFilters) {
   const sw = statusWhere(f.status, t);
   const where: Prisma.PayableWhereInput = {
     companyId: ctx.companyId,
+    ...(f.invoice === "sem" ? { invoiceId: null } : f.invoice === "com" ? { invoiceId: { not: null } } : {}),
     ...sw,
     ...(f.category ? { category: f.category } : {}),
+    ...(f.costCenterId ? { costCenterId: f.costCenterId } : {}),
+    ...(f.supplierId ? { supplierId: f.supplierId } : {}),
     ...(f.from || f.to ? { dueDate: { ...(sw.dueDate ?? {}), ...(f.from ? { gte: f.from } : {}), ...(f.to ? { lte: f.to } : {}) } } : {}),
     ...(f.q
-      ? { OR: [{ description: textContains(f.q) }, { supplier: { name: textContains(f.q) } }, { sale: { code: textContains(f.q) } }] }
+      ? { OR: [{ description: textContains(f.q) }, { supplier: { name: textContains(f.q) } }, { client: { name: textContains(f.q) } }, { sale: { code: textContains(f.q) } }] }
       : {}),
   };
   const page = Math.max(1, f.page ?? 1);
   const [items, total, agg] = await Promise.all([
     prisma.payable.findMany({
       where,
-      orderBy: [{ dueDate: "asc" }, { createdAt: "asc" }],
+      orderBy: entryOrder(f.sort),
       skip: (page - 1) * 25,
       take: 25,
       include: {
         supplier: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
         sale: { select: { id: true, code: true } },
+        costCenter: { select: { id: true, name: true } },
+        invoice: { select: { id: true, number: true, status: true } },
         settlements: { where: { reversedAt: null }, orderBy: { date: "desc" }, take: 1, select: { date: true, method: true } },
         _count: { select: { attachments: true } },
       },
@@ -143,11 +170,15 @@ export async function getEntry(ctx: Ctx, kind: EntryKind, id: string) {
     supplier: { select: { id: true, name: true } },
     settlements: { orderBy: { date: "desc" as const }, include: { account: { select: { name: true } }, attachments: true } },
     attachments: true,
+    costCenter: { select: { id: true, name: true } },
   };
   const entry =
     kind === "receivable"
       ? await prisma.receivable.findFirst({ where: { id, companyId: ctx.companyId }, include: { ...include, client: { select: { id: true, name: true } } } })
-      : await prisma.payable.findFirst({ where: { id, companyId: ctx.companyId }, include });
+      : await prisma.payable.findFirst({
+          where: { id, companyId: ctx.companyId },
+          include: { ...include, client: { select: { id: true, name: true } }, invoice: { select: { id: true, number: true, status: true } } },
+        });
   if (!entry) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
   return { ...entry, balanceCents: entry.amountCents - entry.settledCents, displayStatus: displayStatus(entry.status, entry.dueDate, today(ctx)) };
 }
@@ -162,6 +193,7 @@ export async function createManualReceivable(ctx: Ctx, raw: unknown) {
   return prisma.$transaction(async (tx) => {
     if (d.clientId && !(await tx.client.findFirst({ where: { id: d.clientId, companyId: ctx.companyId } }))) throw new AppError("Cliente inválido.");
     if (d.saleId && !(await tx.sale.findFirst({ where: { id: d.saleId, companyId: ctx.companyId } }))) throw new AppError("Venda inválida.");
+    await assertCostCenter(tx, ctx, d.costCenterId);
     const parts = splitInstallments(d.amountCents, d.installments);
     const ids: string[] = [];
     for (const [i, amount] of parts.entries()) {
@@ -173,6 +205,7 @@ export async function createManualReceivable(ctx: Ctx, raw: unknown) {
           saleId: d.saleId,
           description: d.installments > 1 ? `${d.description} (${i + 1}/${d.installments})` : d.description,
           category: d.category,
+          costCenterId: d.costCenterId,
           amountCents: amount,
           dueDate: addMonths(d.firstDueDate, i),
           method: d.method ?? null,
@@ -196,6 +229,7 @@ export async function createManualPayable(ctx: Ctx, raw: unknown) {
   return prisma.$transaction(async (tx) => {
     if (d.supplierId && !(await tx.supplier.findFirst({ where: { id: d.supplierId, companyId: ctx.companyId } }))) throw new AppError("Fornecedor inválido.");
     if (d.saleId && !(await tx.sale.findFirst({ where: { id: d.saleId, companyId: ctx.companyId } }))) throw new AppError("Venda inválida.");
+    await assertCostCenter(tx, ctx, d.costCenterId);
     const recurring = d.recurringMonths > 1;
     const parts = recurring ? Array(d.recurringMonths).fill(d.amountCents) : splitInstallments(d.amountCents, d.installments);
     const group = recurring ? newKey() : null;
@@ -209,6 +243,7 @@ export async function createManualPayable(ctx: Ctx, raw: unknown) {
           saleId: d.saleId,
           description: parts.length > 1 ? `${d.description} (${i + 1}/${parts.length})` : d.description,
           category: d.category,
+          costCenterId: d.costCenterId,
           amountCents: amount,
           dueDate: addMonths(d.firstDueDate, i),
           method: d.method ?? null,
@@ -240,6 +275,9 @@ export async function updateEntry(ctx: Ctx, kind: EntryKind, id: string, raw: un
     if (e.sourceKey && d.amountCents !== e.amountCents)
       throw new AppError("Este lançamento foi gerado por uma venda. Altere o valor pela própria venda.");
     if (d.amountCents < e.settledCents) throw new AppError(`O valor não pode ser menor que o já baixado (${money(e.settledCents)}).`);
+    await assertCostCenter(tx, ctx, d.costCenterId);
+    if (e.invoiceId && d.dueDate !== e.dueDate)
+      throw new AppError("Este lançamento está em uma fatura de fornecedor: o vencimento é o da fatura.");
     await model.update({ where: { id }, data: { ...d, method: d.method ?? null, status: entryStatus(d.amountCents, e.settledCents, false) } });
     await audit(tx, ctx, `${kind === "receivable" ? "receber" : "pagar"}.alterado`, kind === "receivable" ? "Receivable" : "Payable", id, {
       antes: { amountCents: e.amountCents },
@@ -257,7 +295,8 @@ export async function cancelEntry(ctx: Ctx, kind: EntryKind, id: string) {
     if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
     if (e.status === "CANCELADO") return;
     if (e.settledCents > 0) throw new AppError("Há baixas registradas. Estorne as baixas antes de cancelar.");
-    if (e.sourceKey) throw new AppError("Lançamento gerado por venda: ajuste ou cancele pela venda.");
+    if (e.sourceKey && !e.sourceKey.startsWith("ajuste:")) throw new AppError("Lançamento gerado por venda: ajuste ou cancele pela venda.");
+    if (e.invoiceId) throw new AppError("Remova o lançamento da fatura do fornecedor antes de cancelá-lo.");
     await model.update({ where: { id }, data: { status: "CANCELADO", cancelledAt: new Date() } });
     await audit(tx, ctx, `${kind === "receivable" ? "receber" : "pagar"}.cancelado`, kind === "receivable" ? "Receivable" : "Payable", id);
   });
@@ -284,14 +323,27 @@ async function recomputeEntry(tx: Tx, kind: EntryKind, id: string) {
 export async function settleEntry(ctx: Ctx, kind: EntryKind, id: string, raw: unknown) {
   assertCan(ctx, "finance.manage");
   const d = settlementSchema.parse(raw);
+  return prisma.$transaction((tx) => settleEntryTx(tx, ctx, kind, id, d, { viaInvoice: false }));
+}
+
+/** Baixa dentro de uma transação existente (usada também na quitação de faturas de fornecedor). */
+export async function settleEntryTx(
+  tx: Tx,
+  ctx: Ctx,
+  kind: EntryKind,
+  id: string,
+  d: { date: string; amountCents: number; interestCents: number; discountCents: number; accountId: string; method?: string | null; notes?: string | null },
+  opts: { viaInvoice: boolean },
+) {
   const principal = settlementPrincipal(d.amountCents, d.interestCents, d.discountCents);
   if (principal <= 0) throw new AppError("Valor da baixa inválido: o abatimento do saldo deve ser positivo.");
-
-  return prisma.$transaction(async (tx) => {
+  {
     const model = entryDelegate(tx, kind);
     const [e] = await model.findMany({ where: { id, companyId: ctx.companyId } });
     if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
     if (e.status === "CANCELADO") throw new AppError("Lançamento cancelado.");
+    if (!opts.viaInvoice && "invoiceId" in e && e.invoiceId)
+      throw new AppError("Este lançamento está consolidado em uma fatura de fornecedor. Registre o pagamento pela fatura.");
     const balance = e.amountCents - e.settledCents;
     if (balance <= 0) throw new AppError("Lançamento já está quitado.");
     if (principal > balance)
@@ -323,7 +375,7 @@ export async function settleEntry(ctx: Ctx, kind: EntryKind, id: string, raw: un
       status: after.status,
     });
     return { settlementId: s.id, status: after.status };
-  });
+  }
 }
 
 export async function reverseSettlement(ctx: Ctx, settlementId: string, reason: string) {
@@ -345,8 +397,9 @@ export async function reverseSettlement(ctx: Ctx, settlementId: string, reason: 
 
 async function afterSettlementChange(tx: Tx, ctx: Ctx, kind: EntryKind, entryId: string, settlementId: string, op: "baixa" | "estorno") {
   if (kind === "payable") {
-    const p = await tx.payable.findUnique({ where: { id: entryId }, select: { commissionId: true } });
+    const p = await tx.payable.findUnique({ where: { id: entryId }, select: { commissionId: true, invoiceId: true } });
     if (p?.commissionId) await refreshCommissionStatus(tx, p.commissionId);
+    if (p?.invoiceId) await refreshInvoiceStatus(tx, p.invoiceId);
     return;
   }
   if (op !== "baixa") return;
@@ -599,22 +652,43 @@ export async function cashflow(
 export const ALLOWED_MIME = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
+export type AttachmentTarget = { kind: EntryKind | "sale" | "trip" | "invoice"; id: string };
+
+/** Valida o acesso ao destino do anexo (lançamento, venda, viagem ou fatura) dentro da empresa. */
+export async function assertAttachmentTarget(ctx: Ctx, target: AttachmentTarget, write: boolean) {
+  if (target.kind === "receivable" || target.kind === "payable") {
+    assertCan(ctx, write ? "finance.manage" : "finance.view");
+    const [e] = await entryDelegate(prisma as unknown as Tx, target.kind).findMany({ where: { id: target.id, companyId: ctx.companyId } });
+    if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
+  } else if (target.kind === "invoice") {
+    assertCan(ctx, write ? "finance.manage" : "finance.view");
+    if (!(await prisma.supplierInvoice.findFirst({ where: { id: target.id, companyId: ctx.companyId } }))) throw new AppError("Fatura não encontrada.", "NOT_FOUND");
+  } else if (target.kind === "sale") {
+    const sale = await prisma.sale.findFirst({ where: { id: target.id, ...saleScope(ctx) } });
+    if (!sale) throw new AppError("Venda não encontrada.", "NOT_FOUND");
+  } else {
+    const trip = await prisma.trip.findFirst({ where: { id: target.id, companyId: ctx.companyId, ...(can(ctx, "sales.view_all") ? {} : { sales: { some: { sellerId: ctx.userId } } }) } });
+    if (!trip) throw new AppError("Viagem não encontrada.", "NOT_FOUND");
+  }
+}
+
+const targetField = { receivable: "receivableId", payable: "payableId", sale: "saleId", trip: "tripId", invoice: "invoiceId" } as const;
+
 export async function registerAttachment(
   ctx: Ctx,
-  target: { kind: EntryKind; id: string },
-  file: { fileName: string; mimeType: string; sizeBytes: number; storageKey: string },
+  target: AttachmentTarget,
+  file: { fileName: string; mimeType: string; sizeBytes: number; storageKey: string; kind?: string },
 ) {
-  assertCan(ctx, "finance.manage");
   if (!ALLOWED_MIME.includes(file.mimeType)) throw new AppError("Formato não permitido. Envie PDF, PNG, JPG ou WEBP.");
   if (file.sizeBytes > MAX_ATTACHMENT_BYTES) throw new AppError("Arquivo maior que 5 MB.");
-  const model = entryDelegate(prisma as unknown as Tx, target.kind);
-  const [e] = await model.findMany({ where: { id: target.id, companyId: ctx.companyId } });
-  if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
+  await assertAttachmentTarget(ctx, target, true);
+  const kind = file.kind && ATTACHMENT_KINDS.values.includes(file.kind as never) ? file.kind : target.kind === "invoice" ? "FATURA" : target.kind === "sale" || target.kind === "trip" ? "DOCUMENTO" : "COMPROVANTE";
   return prisma.$transaction(async (tx) => {
     const a = await tx.attachment.create({
       data: {
         companyId: ctx.companyId,
-        ...(target.kind === "receivable" ? { receivableId: target.id } : { payableId: target.id }),
+        [targetField[target.kind]]: target.id,
+        kind,
         fileName: file.fileName.slice(0, 200),
         mimeType: file.mimeType,
         sizeBytes: file.sizeBytes,
@@ -622,23 +696,60 @@ export async function registerAttachment(
         uploadedById: ctx.userId,
       },
     });
-    await audit(tx, ctx, "anexo.enviado", "Attachment", a.id, { target });
+    await audit(tx, ctx, "anexo.enviado", "Attachment", a.id, { target, kind });
     return a.id;
   });
 }
 
 export async function getAttachment(ctx: Ctx, id: string) {
-  assertCan(ctx, "finance.view");
   const a = await prisma.attachment.findFirst({ where: { id, companyId: ctx.companyId } });
   if (!a) throw new AppError("Anexo não encontrado.", "NOT_FOUND");
+  const target: AttachmentTarget | null = a.saleId
+    ? { kind: "sale", id: a.saleId }
+    : a.tripId
+      ? { kind: "trip", id: a.tripId }
+      : a.invoiceId
+        ? { kind: "invoice", id: a.invoiceId }
+        : null;
+  if (target) await assertAttachmentTarget(ctx, target, false);
+  else assertCan(ctx, "finance.view");
   return a;
 }
 
 export async function financeOptions(ctx: Ctx) {
-  const [accounts, clients, suppliers] = await Promise.all([
+  const [accounts, clients, suppliers, costCenters] = await Promise.all([
     prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.client.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" }, take: 500 }),
     prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.costCenter.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
-  return { accounts, clients, suppliers };
+  return { accounts, clients, suppliers, costCenters };
+}
+
+/** Indicadores do topo do módulo financeiro (posição atual, sem filtro de período). */
+export async function financeOverview(ctx: Ctx) {
+  assertCan(ctx, "finance.view");
+  const t = today(ctx);
+  const c = ctx.companyId;
+  const open = { in: ["PENDENTE", "PARCIAL"] };
+  const [rec, recOver, pay, payOver, payWeek, accounts] = await Promise.all([
+    prisma.receivable.aggregate({ where: { companyId: c, status: open }, _sum: { amountCents: true, settledCents: true }, _count: { _all: true } }),
+    prisma.receivable.aggregate({ where: { companyId: c, status: open, dueDate: { lt: t } }, _sum: { amountCents: true, settledCents: true }, _count: { _all: true } }),
+    prisma.payable.aggregate({ where: { companyId: c, status: open }, _sum: { amountCents: true, settledCents: true }, _count: { _all: true } }),
+    prisma.payable.aggregate({ where: { companyId: c, status: open, dueDate: { lt: t } }, _sum: { amountCents: true, settledCents: true }, _count: { _all: true } }),
+    prisma.payable.aggregate({ where: { companyId: c, status: open, dueDate: { gte: t, lte: addDays(t, 7) } }, _sum: { amountCents: true, settledCents: true } }),
+    listAccounts(ctx),
+  ]);
+  const bal = (a: { _sum: { amountCents: number | null; settledCents: number | null } }) => (a._sum.amountCents ?? 0) - (a._sum.settledCents ?? 0);
+  return {
+    receivableCents: bal(rec),
+    receivableCount: rec._count._all,
+    overdueReceivableCents: bal(recOver),
+    overdueReceivableCount: recOver._count._all,
+    payableCents: bal(pay),
+    payableCount: pay._count._all,
+    overduePayableCents: bal(payOver),
+    payableWeekCents: bal(payWeek),
+    balanceCents: sum(accounts.map((a) => a.balanceCents)),
+  };
 }

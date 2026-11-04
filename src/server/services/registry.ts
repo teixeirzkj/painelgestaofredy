@@ -1,3 +1,4 @@
+import { addMonths } from "@/lib/dates";
 // Cadastros: clientes e fornecedores.
 import { prisma, Prisma } from "../db";
 import { assertCan, can, today, type Ctx } from "../context";
@@ -8,6 +9,7 @@ import { textContains } from "./query";
 import { displayStatus } from "@/lib/finance";
 import { onlyDigits } from "@/lib/utils";
 import { saleScope } from "./sales";
+import { tripDates, tripStatus } from "./trips";
 
 // ------------------------------ Clientes ------------------------------
 
@@ -80,7 +82,7 @@ export async function getClient(ctx: Ctx, id: string) {
   const client = await prisma.client.findFirst({ where: { AND: [{ id }, clientScope(ctx)] }, include: { owner: { select: { name: true } } } });
   if (!client) throw new AppError("Cliente não encontrado.", "NOT_FOUND");
   const t = today(ctx);
-  const [sales, receivables, contracts] = await Promise.all([
+  const [sales, receivables, contracts, trips, asPassenger] = await Promise.all([
     prisma.sale.findMany({
       where: { clientId: id, ...saleScope(ctx) },
       orderBy: { saleDate: "desc" },
@@ -90,24 +92,41 @@ export async function getClient(ctx: Ctx, id: string) {
       ? prisma.receivable.findMany({
           where: { companyId: ctx.companyId, clientId: id, status: { not: "CANCELADO" } },
           orderBy: { dueDate: "asc" },
-          include: { sale: { select: { code: true, id: true } } },
+          include: { sale: { select: { code: true, id: true, clientId: true } } },
         })
       : prisma.receivable.findMany({
           where: { companyId: ctx.companyId, clientId: id, status: { not: "CANCELADO" }, sale: { sellerId: ctx.userId } },
           orderBy: { dueDate: "asc" },
-          include: { sale: { select: { code: true, id: true } } },
+          include: { sale: { select: { code: true, id: true, clientId: true } } },
         }),
     prisma.contract.findMany({
       where: { companyId: ctx.companyId, sale: { clientId: id, ...saleScope(ctx) } },
       include: { sale: { select: { code: true } } },
     }),
+    prisma.trip.findMany({
+      where: { companyId: ctx.companyId, clientId: id },
+      include: { sales: { where: saleScope(ctx), select: { status: true, tripStart: true, tripEnd: true, grossCents: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+    // viagens em que a pessoa foi passageira em vendas de outro cliente (ex.: dependente, grupo)
+    prisma.passenger.findMany({
+      where: { companyId: ctx.companyId, clientId: id, sale: { ...saleScope(ctx), clientId: { not: id } } },
+      include: { sale: { select: { id: true, code: true, destination: true, tripStart: true, status: true, client: { select: { name: true } } } } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
   ]);
+  const passportAlert =
+    client.passportExpiry && client.passportExpiry < addMonths(t, 6) ? (client.passportExpiry < t ? "VENCIDO" : "VENCE_EM_6_MESES") : null;
   const active = sales.filter((s) => s.status !== "CANCELADA");
   return {
     client,
     sales,
     receivables: receivables.map((r) => ({ ...r, balanceCents: r.amountCents - r.settledCents, displayStatus: displayStatus(r.status, r.dueDate, t) })),
     contracts,
+    trips: trips.map((tr) => ({ ...tr, ...tripDates(tr.sales), status: tripStatus(!!tr.cancelledAt, tr.sales, t) })),
+    asPassenger,
+    passportAlert,
     stats: {
       totalCents: active.reduce((a, s) => a + s.grossCents, 0),
       count: active.length,
@@ -201,9 +220,9 @@ export async function getSupplier(ctx: Ctx, id: string) {
   if (!supplier) throw new AppError("Fornecedor não encontrado.", "NOT_FOUND");
   const showFinance = can(ctx, "finance.view");
   const t = today(ctx);
-  const [items, payables, reservations, receivables] = await Promise.all([
+  const [items, payables, reservations, receivables, invoices, rules] = await Promise.all([
     prisma.saleItem.findMany({
-      where: { companyId: ctx.companyId, supplierId: id, sale: saleScope(ctx) },
+      where: { companyId: ctx.companyId, OR: [{ supplierId: id }, { operatorId: id }], sale: saleScope(ctx) },
       include: { sale: { select: { id: true, code: true, saleDate: true, status: true, client: { select: { name: true } } } } },
       orderBy: { sale: { saleDate: "desc" } },
       take: 100,
@@ -220,6 +239,10 @@ export async function getSupplier(ctx: Ctx, id: string) {
     showFinance
       ? prisma.receivable.findMany({ where: { companyId: ctx.companyId, supplierId: id, status: { not: "CANCELADO" } }, include: { sale: { select: { id: true, code: true } } } })
       : Promise.resolve([]),
+    showFinance
+      ? prisma.supplierInvoice.findMany({ where: { companyId: ctx.companyId, supplierId: id }, orderBy: { dueDate: "desc" }, take: 20 })
+      : Promise.resolve([]),
+    prisma.commissionRule.findMany({ where: { companyId: ctx.companyId, supplierId: id }, orderBy: { createdAt: "asc" } }),
   ]);
   const active = items.filter((i) => i.sale.status !== "CANCELADA" && i.sale.status !== "ORCAMENTO");
   return {
@@ -228,6 +251,8 @@ export async function getSupplier(ctx: Ctx, id: string) {
     payables: payables.map((p) => ({ ...p, balanceCents: p.amountCents - p.settledCents, displayStatus: displayStatus(p.status, p.dueDate, t) })),
     receivables: receivables.map((r) => ({ ...r, balanceCents: r.amountCents - r.settledCents, displayStatus: displayStatus(r.status, r.dueDate, t) })),
     reservations,
+    invoices,
+    rules,
     stats: {
       salesCount: new Set(active.map((i) => i.saleId)).size,
       negotiatedCents: active.reduce((a, i) => a + i.priceCents, 0),
@@ -270,4 +295,9 @@ export async function archiveSupplier(ctx: Ctx, id: string) {
 
 export async function supplierOptions(ctx: Ctx) {
   return prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true, category: true }, orderBy: { name: "asc" } });
+}
+
+/** Busca de pessoas para pagantes e passageiros (mesmo escopo de clientes). */
+export async function searchPeople(ctx: Ctx, q: string) {
+  return searchClients(ctx, q);
 }

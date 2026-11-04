@@ -1,21 +1,23 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
-import { FileSignature, ExternalLink } from "lucide-react";
+import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History, Paperclip, Plane, UserRound, Check, CircleDashed, Bus, Webhook } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
-import { can } from "@/server/context";
+import { can, today } from "@/server/context";
 import { getSale, getSaleAudit } from "@/server/services/sales";
-import { Card, CardHeader, LinkButton, Notice, PageHeader, Stat, Table, Td, Th, Badge } from "@/components/ui";
+import { supplierOptions } from "@/server/services/registry";
+import { Card, CardHeader, DataList, LinkButton, Notice, PageHeader, Table, Td, Th, Badge } from "@/components/ui";
 import { ContractStatusBadge, EntryStatusBadge, FinancialStatusBadge, SaleStatusBadge } from "@/components/status";
-import { formatBRL, formatPercentBps } from "@/lib/money";
+import { AttachmentsPanel } from "@/components/attachments";
+import { formatBRL, formatPercentBps, sum } from "@/lib/money";
 import { formatDate, formatDateTime } from "@/lib/dates";
-import { COMMERCIAL_MODELS, PAYABLE_CATEGORIES, PAYMENT_METHODS, PRODUCT_TYPES } from "@/lib/constants";
+import { COMMERCIAL_MODELS, PAYABLE_CATEGORIES, PAYMENT_METHODS, PRODUCT_TYPES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 import { displayStatus } from "@/lib/finance";
-import { maskDocument, maskPassport, formatDocument } from "@/lib/utils";
-import { today } from "@/server/context";
+import { maskDocument, maskPassport, formatDocument, cn } from "@/lib/utils";
 import type { Params } from "@/lib/params";
 import { SaleHeaderActions } from "../sale-actions";
 import { ReservationEditor } from "./reservation-editor";
 import { PrepareContractButton } from "./prepare-contract";
+import { RefundButton, TripLink } from "./sale-extras";
 
 export const metadata = { title: "Venda" };
 
@@ -25,76 +27,166 @@ const ACTION_LABEL: Record<string, string> = {
   "venda.confirmada": "Venda confirmada",
   "venda.alterada": "Venda alterada",
   "venda.cancelada": "Venda cancelada",
+  "venda.ajuste_registrado": "Reembolso/multa registrado",
+  "viagem.venda_vinculada": "Vinculada a uma viagem",
+  "viagem.venda_desvinculada": "Desvinculada da viagem",
+  "orcamento.recebido_api": "Orçamento recebido por integração",
 };
 
 export default async function SalePage({ params }: { params: Params }) {
   const ctx = await requirePageContext();
   const { id } = await params;
-  const [s, history] = await orNotFound(Promise.all([getSale(ctx, id), getSaleAudit(ctx, id)]));
+  const [s, history, suppliers] = await orNotFound(Promise.all([getSale(ctx, id), getSaleAudit(ctx, id), can(ctx, "finance.manage") ? supplierOptions(ctx) : Promise.resolve([])]));
   const t = today(ctx);
   const contract = s.contracts[0];
   const salesRec = s.receivables.filter((r) => r.origin === "VENDA");
-  const supplierRec = s.receivables.filter((r) => r.origin !== "VENDA");
-  const missing = [!s.destination && "destino", !s.tripStart && "data da viagem", !s.locator && "localizador", !s.client.document && "CPF/CNPJ do cliente"].filter(Boolean);
+  const otherRec = s.receivables.filter((r) => r.origin !== "VENDA");
+  const confirmed = s.status === "CONFIRMADA" || s.status === "CONCLUIDA";
+  const activeRec = salesRec.filter((r) => r.status !== "CANCELADO");
+  const received = sum(activeRec.map((r) => r.settledCents));
+  const toReceive = sum(activeRec.map((r) => r.amountCents));
+  const paxNamed = s.passengers.length;
+  const missing = [
+    !s.destination && "destino",
+    !s.tripStart && "data da viagem",
+    !s.locator && !s.items.some((i) => i.locator) && "localizador",
+    !s.client.document && "CPF/CNPJ do cliente",
+    paxNamed < s.passengerCount && `${s.passengerCount - paxNamed} passageiro(s) sem nome`,
+  ].filter(Boolean) as string[];
+  const ravDu = sum(s.items.map((i) => i.ravCents + i.duCents));
+  const payersDiffer = activeRec.some((r) => r.clientId && r.clientId !== s.clientId);
+
+  // Jornada: atendimento → orçamento → venda → financeiro → contrato → pré-viagem → pós-venda
+  const steps = [
+    { label: "Orçamento", done: true, detail: s.origin === "API" ? "via integração" : "registrado" },
+    { label: "Venda", done: confirmed, detail: confirmed ? "confirmada" : s.status === "CANCELADA" ? "cancelada" : "rascunho" },
+    { label: "Financeiro", done: confirmed && toReceive > 0 && received >= toReceive, detail: confirmed ? (toReceive ? `${formatBRL(received)} de ${formatBRL(toReceive)}` : "sem cobrança") : "após confirmar" },
+    { label: "Contrato", done: contract?.status === "ASSINADO", detail: contract ? (contract.status === "ASSINADO" ? "assinado" : contract.status === "AGUARDANDO_ENVIO" ? "emitido" : contract.status === "EM_PREPARACAO" ? "em preparação" : contract.status === "NAO_GERADO" ? "sem modelo" : contract.status.toLowerCase()) : "após confirmar" },
+    { label: "Pré-viagem", done: !!s.tripStart && s.tripStart <= t, detail: s.tripStart ? (missing.length ? `${missing.length} pendência(s)` : `embarque ${formatDate(s.tripStart)}`) : "sem data" },
+    { label: "Pós-venda", done: !!s.tripEnd && s.tripEnd < t, detail: s.tripEnd ? (s.tripEnd < t ? "viagem concluída" : `retorno ${formatDate(s.tripEnd)}`) : "—" },
+  ];
 
   return (
     <>
       <PageHeader
         back={{ href: "/vendas", label: "Vendas" }}
-        title={
-          <span className="flex flex-wrap items-center gap-2">
-            {s.code} <SaleStatusBadge s={s.status} /> <FinancialStatusBadge s={s.financialStatus} />
-          </span>
+        title={s.code}
+        description={
+          <>
+            <Link href={`/clientes/${s.client.id}`} className="font-medium text-ink hover:text-brand-700">
+              {s.client.name}
+            </Link>{" "}
+            · {s.destination ?? "destino não informado"} · vendida em {formatDate(s.saleDate)} por {s.seller.name}
+          </>
         }
-        description={`${s.client.name} · ${s.destination ?? "destino não informado"} · vendida em ${formatDate(s.saleDate)} por ${s.seller.name}`}
-        actions={<SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} />}
+        meta={
+          <>
+            <SaleStatusBadge s={s.status} />
+            <FinancialStatusBadge s={s.financialStatus} />
+            {s.trip && (
+              <Link href={`/viagens/${s.trip.id}`}>
+                <Badge tone="violet">
+                  <Plane className="h-3 w-3" /> {s.trip.code}
+                </Badge>
+              </Link>
+            )}
+            {s.excursion && (
+              <Link href={`/excursoes/${s.excursion.id}`}>
+                <Badge tone="violet">
+                  <Bus className="h-3 w-3" /> {s.excursion.code}
+                </Badge>
+              </Link>
+            )}
+            {s.origin === "API" && (
+              <Badge tone="gray">
+                <Webhook className="h-3 w-3" /> recebida por integração
+              </Badge>
+            )}
+          </>
+        }
+        actions={
+          <>
+            {can(ctx, "finance.manage") && s.status !== "ORCAMENTO" && <RefundButton saleId={s.id} suppliers={suppliers} today={t} />}
+            <SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} />
+          </>
+        }
       />
 
       {s.status === "CANCELADA" && (
-        <div className="mb-6">
-          <Notice tone="red" title="Venda cancelada">
-            {s.cancelReason} {s.cancelledAt && `· em ${formatDateTime(s.cancelledAt, ctx.timezone)}`}
-          </Notice>
-        </div>
+        <Notice tone="red" title="Venda cancelada" className="mb-6">
+          {s.cancelReason} {s.cancelledAt && `· em ${formatDateTime(s.cancelledAt, ctx.timezone)}`}. Valores já recebidos ou pagos foram preservados; registre reembolsos e multas pelo botão “Reembolso ou multa”.
+        </Notice>
       )}
       {s.status === "ORCAMENTO" && (
-        <div className="mb-6">
-          <Notice title="Rascunho">Esta venda ainda não foi confirmada: nenhum lançamento financeiro, comissão ou contrato foi gerado.</Notice>
-        </div>
+        <Notice title="Rascunho" className="mb-6">
+          Esta venda ainda não foi confirmada: nenhum lançamento financeiro, comissão ou contrato foi gerado.
+        </Notice>
       )}
-      {s.status === "CONFIRMADA" && missing.length > 0 && (
-        <div className="mb-6">
-          <Notice tone="amber" title="Informações pendentes">
-            Complete: {missing.join(", ")}.
-          </Notice>
-        </div>
+
+      <Card className="mb-6 overflow-x-auto">
+        <ol className="flex min-w-[720px] items-stretch">
+          {steps.map((st, i) => (
+            <li key={st.label} className={cn("relative flex flex-1 items-center gap-3 px-4 py-3.5", i > 0 && "border-l border-line")}>
+              <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full", st.done ? "bg-green-50 text-green-600" : "bg-slate-100 text-slate-400")}>
+                {st.done ? <Check className="h-4 w-4" /> : <CircleDashed className="h-4 w-4" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold text-ink">{st.label}</span>
+                <span className="block truncate text-xs text-muted">{st.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </Card>
+
+      {confirmed && missing.length > 0 && (
+        <Notice tone="amber" title="Etapas que precisam de informação" className="mb-6">
+          Complete para seguir com contrato e pré-viagem: {missing.join(", ")}.
+        </Notice>
       )}
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <div className="space-y-6 xl:col-span-2">
-          <Card className="grid grid-cols-2 gap-5 p-5 sm:grid-cols-4">
-            <Stat label="Faturamento" value={formatBRL(s.grossCents)} />
-            <Stat label="A receber do cliente" value={formatBRL(s.clientPayableCents)} />
-            {s.permissions.showMargin ? (
-              <>
-                <Stat label="Receita da agência" value={formatBRL(s.agencyRevenueCents)} />
-                <Stat label="Lucro bruto" value={formatBRL(s.grossProfitCents)} hint={`Margem ${formatPercentBps(s.marginBps ?? 0)}`} tone={(s.grossProfitCents ?? 0) < 0 ? "danger" : "success"} />
-                <Stat label="Custos / repasses" value={formatBRL(s.costCents)} />
-              </>
-            ) : null}
-            <Stat label="Comissão do vendedor" value={formatBRL(s.sellerCommissionCents)} hint={s.commission ? ({ PENDENTE: "Pendente", PAGA: "Paga", CANCELADA: "Cancelada" } as Record<string, string>)[s.commission.status] : undefined} />
-            {(s.feesCents > 0 || s.discountCents > 0) && <Stat label="Taxas / desconto" value={`${formatBRL(s.feesCents)} / ${formatBRL(s.discountCents)}`} />}
+        <div className="min-w-0 space-y-6 xl:col-span-2">
+          <Card>
+            <CardHeader title="Dados da venda" icon={Wallet} />
+            <div className="p-5">
+              <DataList
+                columns={3}
+                items={[
+                  { label: "Total vendido", value: <span className="font-display text-lg font-semibold">{formatBRL(s.grossCents)}</span> },
+                  { label: "A receber pela agência", value: formatBRL(s.clientPayableCents) },
+                  ...(s.permissions.showMargin
+                    ? [
+                        { label: "Receita da agência", value: formatBRL(s.agencyRevenueCents) },
+                        { label: "Repasse a fornecedores", value: formatBRL(s.costCents) },
+                        {
+                          label: "Lucro bruto",
+                          value: (
+                            <span className={(s.grossProfitCents ?? 0) < 0 ? "font-semibold text-danger" : "font-semibold text-success"}>
+                              {formatBRL(s.grossProfitCents)} <span className="text-xs font-normal text-muted">· {formatPercentBps(s.marginBps ?? 0)}</span>
+                            </span>
+                          ),
+                        },
+                      ]
+                    : []),
+                  { label: "Comissão do vendedor", value: `${formatBRL(s.sellerCommissionCents)}${s.commission ? ` · ${({ PENDENTE: "pendente", PAGA: "paga", CANCELADA: "cancelada" } as Record<string, string>)[s.commission.status]}` : ""}` },
+                  ...(s.intermediary ? [{ label: "Intermediário", value: `${s.intermediary.name}${s.intermediaryCommissionCents !== null ? ` · ${formatBRL(s.intermediaryCommissionCents)}` : ""}` }] : []),
+                  ...(ravDu > 0 ? [{ label: "Taxas RAV/DU", value: formatBRL(ravDu) }] : []),
+                  ...(s.feesCents > 0 ? [{ label: "Taxa de serviço", value: formatBRL(s.feesCents) }] : []),
+                  ...(s.discountCents > 0 ? [{ label: "Desconto", value: formatBRL(s.discountCents) }] : []),
+                ]}
+              />
+            </div>
           </Card>
 
           <Card>
-            <CardHeader title="Produtos e reservas" />
+            <CardHeader title="Produtos e reservas" icon={Package} description={`${s.items.length} produto(s)`} />
             <Table>
               <thead>
                 <tr>
                   <Th>Produto</Th>
-                  <Th>Fornecedor</Th>
-                  <Th>Modelo</Th>
-                  <Th align="right">Valor</Th>
+                  <Th>Fornecedor / operadora</Th>
+                  <Th align="right">Cobrado</Th>
                   {s.permissions.showMargin && <Th align="right">Custo / comissão</Th>}
                   <Th>Reserva</Th>
                 </tr>
@@ -103,14 +195,40 @@ export default async function SalePage({ params }: { params: Params }) {
                 {s.items.map((i) => (
                   <tr key={i.id}>
                     <Td className="min-w-48">
-                      <p className="font-medium">{PRODUCT_TYPES.label(i.productType)}</p>
+                      <p className="font-medium text-ink">{PRODUCT_TYPES.label(i.productType)}</p>
                       {i.description && <p className="text-xs text-muted">{i.description}</p>}
+                      <p className="mt-0.5 text-[11px] text-subtle">{COMMERCIAL_MODELS.label(i.commercialModel)}</p>
                     </Td>
-                    <Td className="min-w-40">{i.supplier ? <Link className="text-brand-700 hover:underline" href={`/fornecedores/${i.supplier.id}`}>{i.supplier.name}</Link> : "—"}</Td>
-                    <Td className="text-xs text-slate-600">{COMMERCIAL_MODELS.label(i.commercialModel)}</Td>
-                    <Td align="right">{formatBRL(i.priceCents)}</Td>
-                    {s.permissions.showMargin && <Td align="right">{i.commercialModel === "COMISSAO" ? `+${formatBRL(i.supplierCommissionCents)}` : formatBRL(i.costCents)}</Td>}
-                    <Td>{i.reservation ? <ReservationEditor r={{ id: i.reservation.id, status: i.reservation.status, locator: i.reservation.locator, notes: i.reservation.notes }} readOnly={!s.permissions.canEdit || s.status === "CANCELADA"} /> : <span className="text-xs text-muted">—</span>}</Td>
+                    <Td className="min-w-40">
+                      {i.supplier ? (
+                        <Link className="text-brand-700 hover:underline" href={`/fornecedores/${i.supplier.id}`}>
+                          {i.supplier.name}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                      {i.operator && <p className="text-xs text-muted">via {i.operator.name}</p>}
+                    </Td>
+                    <Td align="right">
+                      {formatBRL(i.priceCents + i.ravCents + i.duCents)}
+                      {i.ravCents + i.duCents > 0 && <p className="text-[11px] text-muted">inclui RAV/DU {formatBRL(i.ravCents + i.duCents)}</p>}
+                    </Td>
+                    {s.permissions.showMargin && (
+                      <Td align="right">
+                        {i.commercialModel === "COMISSAO" ? `+${formatBRL(i.supplierCommissionCents)}` : formatBRL(i.costCents)}
+                        {(i.overCents ?? 0) > 0 && <p className="text-[11px] text-success">over +{formatBRL(i.overCents)}</p>}
+                        {(i.cardFeeCents ?? 0) > 0 && <p className="text-[11px] text-danger">taxa CC −{formatBRL(i.cardFeeCents)}</p>}
+                      </Td>
+                    )}
+                    <Td>
+                      {i.reservation ? (
+                        <div>
+                          <ReservationEditor r={{ id: i.reservation.id, status: i.reservation.status, locator: i.reservation.locator, notes: i.reservation.notes }} readOnly={!s.permissions.canEdit || s.status === "CANCELADA"} />
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted">após confirmar</span>
+                      )}
+                    </Td>
                   </tr>
                 ))}
               </tbody>
@@ -118,7 +236,7 @@ export default async function SalePage({ params }: { params: Params }) {
           </Card>
 
           <Card>
-            <CardHeader title="Parcelas do cliente" description="Contas a receber geradas pela venda" />
+            <CardHeader title="Financeiro do cliente" icon={Wallet} description={payersDiffer ? "Parcelas a receber · há pagantes diferentes do cliente" : "Parcelas a receber geradas pela venda"} />
             {salesRec.length === 0 ? (
               <p className="px-5 py-6 text-sm text-muted">{s.status === "ORCAMENTO" ? "Serão geradas ao confirmar a venda." : "Sem parcelas."}</p>
             ) : (
@@ -127,6 +245,7 @@ export default async function SalePage({ params }: { params: Params }) {
                   <tr>
                     <Th>Parcela</Th>
                     <Th>Vencimento</Th>
+                    <Th>Pagante</Th>
                     <Th>Forma</Th>
                     <Th align="right">Valor</Th>
                     <Th align="right">Recebido</Th>
@@ -139,6 +258,7 @@ export default async function SalePage({ params }: { params: Params }) {
                     <tr key={r.id} className={r.status === "CANCELADO" ? "opacity-50" : ""}>
                       <Td>{r.installmentNumber ? `${r.installmentNumber}/${r.installmentCount}` : "—"}</Td>
                       <Td>{formatDate(r.dueDate)}</Td>
+                      <Td className="max-w-40 truncate text-slate-600">{r.client?.id === s.clientId ? "Cliente" : r.client?.name ?? "—"}</Td>
                       <Td className="text-slate-600">{PAYMENT_METHODS.label(r.method)}</Td>
                       <Td align="right">{formatBRL(r.amountCents)}</Td>
                       <Td align="right">{formatBRL(r.receivedCents)}</Td>
@@ -159,9 +279,9 @@ export default async function SalePage({ params }: { params: Params }) {
             )}
           </Card>
 
-          {s.permissions.canFinance && (s.payables.length > 0 || supplierRec.length > 0) && (
+          {s.permissions.canFinance && (s.payables.length > 0 || otherRec.length > 0) && (
             <Card>
-              <CardHeader title="Fornecedores e comissões" description="Contas a pagar e comissões a receber geradas pela venda" />
+              <CardHeader title="Fornecedores, comissões e ajustes" icon={Building2} description="Contas a pagar e valores a receber de fornecedores gerados pela venda" />
               <Table>
                 <thead>
                   <tr>
@@ -176,7 +296,14 @@ export default async function SalePage({ params }: { params: Params }) {
                 <tbody>
                   {s.payables.map((p) => (
                     <tr key={p.id} className={p.status === "CANCELADO" ? "opacity-50" : ""}>
-                      <Td className="max-w-72 truncate">{p.description}</Td>
+                      <Td className="max-w-72">
+                        <span className="block truncate">{p.description}</span>
+                        {p.invoice && (
+                          <Link href={`/financeiro/faturas/${p.invoice.id}`} className="text-[11px] text-brand-600 hover:underline">
+                            na fatura {p.invoice.number}
+                          </Link>
+                        )}
+                      </Td>
                       <Td>
                         <Badge tone="red">A pagar · {PAYABLE_CATEGORIES.label(p.category)}</Badge>
                       </Td>
@@ -192,11 +319,11 @@ export default async function SalePage({ params }: { params: Params }) {
                       </Td>
                     </tr>
                   ))}
-                  {supplierRec.map((r) => (
+                  {otherRec.map((r) => (
                     <tr key={r.id} className={r.status === "CANCELADO" ? "opacity-50" : ""}>
                       <Td className="max-w-72 truncate">{r.description}</Td>
                       <Td>
-                        <Badge tone="green">A receber · comissão</Badge>
+                        <Badge tone="green">A receber · {RECEIVABLE_CATEGORIES.label(r.category)}</Badge>
                       </Td>
                       <Td>{formatDate(r.dueDate)}</Td>
                       <Td align="right">{formatBRL(r.amountCents)}</Td>
@@ -214,42 +341,66 @@ export default async function SalePage({ params }: { params: Params }) {
               </Table>
             </Card>
           )}
+
+          <Card>
+            <CardHeader title="Documentos e vouchers" icon={Paperclip} description="Vouchers, bilhetes, documentos de viagem e comprovantes desta venda" />
+            <AttachmentsPanel target={{ kind: "sale", id: s.id }} items={s.attachments} canUpload={s.permissions.canEdit && s.status !== "ORCAMENTO"} timezone={ctx.timezone} emptyText={s.status === "ORCAMENTO" ? "Disponível após confirmar a venda." : "Nenhum documento anexado."} />
+          </Card>
         </div>
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Cliente" action={<Link href={`/clientes/${s.client.id}`} className="text-xs font-medium text-brand-600 hover:underline">Ver cliente</Link>} />
-            <dl className="space-y-2 p-5 text-sm">
-              <p className="font-medium">{s.client.name}</p>
+            <CardHeader title="Cliente" icon={UserRound} action={<Link href={`/clientes/${s.client.id}`} className="text-xs font-medium text-brand-600 hover:underline">Ver cadastro</Link>} />
+            <div className="space-y-1 p-5 text-sm">
+              <p className="font-semibold text-ink">{s.client.name}</p>
               <p className="text-muted">{s.client.document ? formatDocument(s.client.document) : "CPF/CNPJ não informado"}</p>
               <p className="text-muted">{s.client.whatsapp ?? s.client.phone ?? "—"}</p>
-              <p className="text-muted">{s.client.email ?? ""}</p>
-            </dl>
+              {s.client.email && <p className="text-muted">{s.client.email}</p>}
+            </div>
           </Card>
           <Card>
-            <CardHeader title="Viagem" />
-            <dl className="grid grid-cols-2 gap-4 p-5 text-sm">
-              <Stat label="Início" value={formatDate(s.tripStart)} />
-              <Stat label="Retorno" value={formatDate(s.tripEnd)} />
-              <Stat label="Passageiros" value={String(s.passengerCount)} />
-              <Stat label="Localizador" value={s.locator ?? "—"} />
-            </dl>
-            {s.passengers.length > 0 && (
-              <ul className="border-t border-line px-5 py-3 text-sm">
+            <CardHeader title="Viagem" icon={Plane} />
+            <div className="space-y-4 p-5">
+              <DataList
+                items={[
+                  { label: "Início", value: formatDate(s.tripStart) },
+                  { label: "Retorno", value: formatDate(s.tripEnd) },
+                  { label: "Passageiros", value: String(s.passengerCount) },
+                  { label: "Localizador", value: s.locator ?? "—" },
+                ]}
+              />
+              <TripLink saleId={s.id} clientId={s.clientId} trip={s.trip} canEdit={s.permissions.canEdit && s.status !== "CANCELADA"} />
+            </div>
+          </Card>
+          <Card>
+            <CardHeader title="Passageiros" icon={Users} description={`${paxNamed} de ${s.passengerCount} informado(s)`} />
+            {s.passengers.length === 0 ? (
+              <p className="px-5 py-5 text-sm text-muted">Nenhum passageiro informado.</p>
+            ) : (
+              <ul className="divide-y divide-line">
                 {s.passengers.map((p) => (
-                  <li key={p.id} className="flex justify-between gap-2 py-1">
-                    <span>{p.name}</span>
-                    <span className="text-xs text-muted">
-                      {maskDocument(p.document)}
+                  <li key={p.id} className="px-5 py-2.5 text-sm">
+                    <p className="font-medium text-ink">
+                      {p.client ? (
+                        <Link href={`/clientes/${p.client.id}`} className="hover:text-brand-700">
+                          {p.name}
+                        </Link>
+                      ) : (
+                        p.name
+                      )}
+                    </p>
+                    <p className="text-xs text-muted">
+                      {maskDocument(p.document) || "sem documento"}
                       {p.passportNumber && ` · Pass. ${maskPassport(p.passportNumber)}`}
-                    </span>
+                      {p.room && ` · quarto ${p.room}`}
+                    </p>
                   </li>
                 ))}
               </ul>
             )}
           </Card>
           <Card>
-            <CardHeader title="Contrato" />
+            <CardHeader title="Contrato" icon={FileSignature} />
             <div className="space-y-3 p-5 text-sm">
               {contract ? (
                 <>
@@ -264,7 +415,7 @@ export default async function SalePage({ params }: { params: Params }) {
                     </LinkButton>
                   )}
                 </>
-              ) : s.status === "CONFIRMADA" || s.status === "CONCLUIDA" ? (
+              ) : confirmed ? (
                 can(ctx, "contracts.manage") ? <PrepareContractButton saleId={s.id} /> : <p className="text-muted">Contrato não gerado.</p>
               ) : (
                 <p className="text-muted">Gerado após a confirmação da venda.</p>
@@ -278,11 +429,11 @@ export default async function SalePage({ params }: { params: Params }) {
             </Card>
           )}
           <Card>
-            <CardHeader title="Histórico" />
+            <CardHeader title="Histórico" icon={History} />
             <ol className="space-y-3 p-5 text-sm">
               {history.map((h) => (
-                <li key={h.id} className="border-l-2 border-brand-100 pl-3">
-                  <p className="font-medium">{ACTION_LABEL[h.action] ?? h.action}</p>
+                <li key={h.id} className="relative border-l-2 border-brand-100 pl-3">
+                  <p className="font-medium text-ink">{ACTION_LABEL[h.action] ?? h.action}</p>
                   <p className="text-xs text-muted">
                     {h.user?.name ?? "Sistema"} · {formatDateTime(h.createdAt, ctx.timezone)}
                   </p>

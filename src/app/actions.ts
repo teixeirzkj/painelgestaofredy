@@ -17,6 +17,11 @@ import * as contracts from "@/server/services/contracts";
 import * as automations from "@/server/services/automations";
 import * as reconciliation from "@/server/services/reconciliation";
 import * as settings from "@/server/services/settings";
+import * as search from "@/server/services/search";
+import * as trips from "@/server/services/trips";
+import * as excursions from "@/server/services/excursions";
+import * as invoices from "@/server/services/invoices";
+import * as catalog from "@/server/services/catalog";
 import { assertCan } from "@/server/context";
 
 function act<T>(fn: (ctx: Awaited<ReturnType<typeof requireContext>>) => Promise<T>, message?: string): Promise<ActionResult<T>> {
@@ -117,3 +122,32 @@ export const updateCompanyAction = async (input: unknown) => act((ctx) => settin
 export const setRolePermissionAction = async (role: string, permission: string, allowed: boolean) => act((ctx) => settings.setRolePermission(ctx, role, permission, allowed), "Permissão atualizada.");
 export const saveUserAction = async (id: string | null, input: unknown) => act((ctx) => settings.saveUser(ctx, id, input), "Usuário salvo.");
 export const rotateApiKeyAction = async () => act((ctx) => settings.rotateApiKey(ctx));
+
+// ------------------------------ Busca global ------------------------------
+export const globalSearchAction = async (q: string) => toResult(async () => search.globalSearch(await requireContext(), q));
+
+// ------------------------------ Vendas: ajustes, viagens e excursões ------------------------------
+export const registerRefundAction = async (saleId: string, input: unknown) => act((ctx) => sales.registerRefund(ctx, saleId, input), "Lançamento registrado no financeiro.");
+export const tripOptionsAction = async (clientId: string) => toResult(async () => trips.tripOptionsForClient(await requireContext(), clientId));
+export const createTripAction = async (input: unknown) => act((ctx) => trips.createTrip(ctx, input), "Viagem criada.");
+export const updateTripAction = async (id: string, input: unknown) => act((ctx) => trips.updateTrip(ctx, id, input), "Viagem atualizada.");
+export const setTripCancelledAction = async (id: string, cancelled: boolean) => act((ctx) => trips.setTripCancelled(ctx, id, cancelled), cancelled ? "Viagem cancelada." : "Viagem reativada.");
+export const linkSaleToTripAction = async (tripId: string | null, saleId: string) => act((ctx) => trips.linkSaleToTrip(ctx, tripId, saleId), tripId ? "Venda vinculada à viagem." : "Venda desvinculada da viagem.");
+export const saveExcursionAction = async (id: string | null, input: unknown) => act((ctx) => excursions.saveExcursion(ctx, id, input), "Excursão salva.");
+export const addExcursionCostAction = async (id: string, input: unknown) => act((ctx) => excursions.addExcursionCost(ctx, id, input), "Custo lançado em contas a pagar.");
+export const updatePassengerRoomAction = async (passengerId: string, input: unknown) => act((ctx) => excursions.updatePassengerRoom(ctx, passengerId, input), "Passageiro atualizado.");
+
+// ------------------------------ Faturas de fornecedor ------------------------------
+export const createInvoiceAction = async (input: unknown) => act((ctx) => invoices.createInvoice(ctx, input), "Fatura registrada.");
+export const addInvoiceItemsAction = async (id: string, payableIds: string[]) => act((ctx) => invoices.addPayablesToInvoice(ctx, id, payableIds), "Lançamentos vinculados à fatura.");
+export const removeInvoiceItemAction = async (id: string, payableId: string) => act((ctx) => invoices.removePayableFromInvoice(ctx, id, payableId), "Lançamento removido da fatura.");
+export const registerInvoiceDifferenceAction = async (id: string, reason: string) => act((ctx) => invoices.registerInvoiceDifference(ctx, id, reason), "Diferença registrada na fatura.");
+export const checkInvoiceAction = async (id: string) => act((ctx) => invoices.checkInvoice(ctx, id), "Fatura conferida.");
+export const reopenInvoiceAction = async (id: string) => act((ctx) => invoices.reopenInvoice(ctx, id), "Fatura reaberta para conferência.");
+export const payInvoiceAction = async (id: string, input: unknown) => act((ctx) => invoices.payInvoice(ctx, id, input), "Pagamento da fatura registrado.");
+export const cancelInvoiceAction = async (id: string) => act((ctx) => invoices.cancelInvoice(ctx, id), "Fatura cancelada.");
+
+// ------------------------------ Cadastros auxiliares ------------------------------
+export const saveCostCenterAction = async (id: string | null, input: unknown) => act((ctx) => catalog.saveCostCenter(ctx, id, input), "Centro de custo salvo.");
+export const saveCommissionRuleAction = async (id: string | null, input: unknown) => act((ctx) => catalog.saveCommissionRule(ctx, id, input), "Regra salva.");
+export const deleteCommissionRuleAction = async (id: string) => act((ctx) => catalog.deleteCommissionRule(ctx, id), "Regra excluída.");

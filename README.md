@@ -1,8 +1,10 @@
-# Frédy Gestão — MVP
+# Frédy Gestão
 
 Módulo de gestão comercial e financeira para agências de turismo. O vendedor lança a venda uma única vez e o sistema prepara automaticamente parcelas a receber, contas a pagar aos fornecedores, comissão do vendedor, reservas, prévia de contrato e eventos para integrações.
 
 > Primeira agência: Azul Viagens Guarapuava. A arquitetura é multiempresa (multi-tenant) desde o início.
+
+Módulos: dashboard, vendas, **viagens**, **excursões e grupos**, clientes (PF/PJ), financeiro (receber, pagar, **faturas de fornecedores**, fluxo de caixa, contas, conciliação), fornecedores com **regras de comissão/over**, contratos, relatórios (incluindo **DRE gerencial**), automações e configurações. A comparação com o Monde está em [MONDE_GAP_ANALYSIS.md](MONDE_GAP_ANALYSIS.md).
 
 ## Como executar
 
@@ -34,7 +36,7 @@ Outros comandos:
 | financeiro@azulviagens.demo | Financeiro |
 | admin@agenciab.demo | Administrador de outra agência (para verificar isolamento) |
 
-Todos os dados da demonstração são fictícios e as empresas estão marcadas como demonstração (faixa amarela no topo). A venda com localizador **EXEMPLO8000** (cliente "Mariana Exemplo da Silva"; busque por EXEMPLO8000) é o cenário obrigatório do briefing: pacote de R$ 8.000, custo R$ 6.500, comissão R$ 200, 4 × R$ 2.000.
+Todos os dados da demonstração são fictícios e as empresas estão marcadas como demonstração (selo "Demonstração" no topo). Além das vendas, a demonstração inclui: a viagem **Férias em Lisboa** (aéreo com RAV/DU e taxa CC, hotel via operadora com over, intermediário e parcelas pagas por uma empresa), a excursão **Beto Carrero World** com rooming list e custos, uma **fatura de operadora com divergência de R$ 35** para conferir, e um reembolso com multa em venda cancelada. A venda com localizador **EXEMPLO8000** (cliente "Mariana Exemplo da Silva"; busque por EXEMPLO8000) é o cenário obrigatório do briefing: pacote de R$ 8.000, custo R$ 6.500, comissão R$ 200, 4 × R$ 2.000.
 
 ## Stack e decisões
 
@@ -69,9 +71,15 @@ Cada produto da venda tem um **modelo comercial**:
 
 | Modelo | Quem recebe do cliente | Conta a pagar | Receita própria da agência |
 |---|---|---|---|
-| Intermediação | agência | custo ao fornecedor | valor − custo |
-| Revenda | agência | custo ao fornecedor | valor cheio (custo = CPV) |
-| Comissão | fornecedor (direto) | nenhuma | comissão do fornecedor (gera conta a receber do fornecedor) |
+| Intermediação | agência | custo ao fornecedor (ou à operadora) | valor − custo + RAV + DU + over |
+| Revenda | agência | custo ao fornecedor | valor cheio + RAV + DU + over (custo = CPV) |
+| Comissão | fornecedor (direto) | nenhuma | comissão + over + RAV + DU − taxa CC (conta a receber do fornecedor) |
+
+- **RAV/DU**: cobradas do cliente, receita da agência. **Taxa CC**: só no modelo comissão e nunca maior que RAV+DU.
+- **Over**: incentivo do fornecedor; gera conta a receber. **Intermediário**: comissão vira conta a pagar ao parceiro e reduz o lucro.
+- **Pagantes**: cada parcela pode ter um pagante diferente do cliente; cliente, pagante e passageiro são cadastros independentes.
+- **Faturas de fornecedores** consolidam contas a pagar existentes (não criam despesa nova); a quitação baixa todos os itens numa transação e itens de fatura não podem ser baixados avulsos.
+- **Reembolsos** (cliente/fornecedor) são repasses e ficam fora do DRE; **multas** entram no resultado.
 
 - **Faturamento** = Σ valores + taxas − descontos (competência: data da venda).
 - **Lucro bruto** = Σ(valor − custo) + comissões de fornecedor + taxas − descontos − comissão do vendedor.
@@ -79,7 +87,7 @@ Cada produto da venda tem um **modelo comercial**:
 - **Caixa** = baixas efetivas (data do pagamento). Transferências entre contas não são receita nem despesa.
 - A comissão do vendedor gera **um** registro de comissão e **uma** conta a pagar (categoria Comissões); o lucro é calculado pela venda, não pela soma das despesas, então não há dupla contagem.
 
-Exemplo obrigatório: faturamento R$ 8.000 · receita própria R$ 1.500 · lucro bruto R$ 1.300 · margem 16,25%.
+Faturamento inclui RAV/DU cobradas do cliente. Exemplo obrigatório: faturamento R$ 8.000 · receita própria R$ 1.500 · lucro bruto R$ 1.300 · margem 16,25%.
 
 ### Integridade
 
@@ -112,6 +120,7 @@ Exemplo obrigatório: faturamento R$ 8.000 · receita própria R$ 1.500 · lucro
 
 | Item | Situação |
 |---|---|
+| Orçamentos externos | `POST /api/v1/orcamentos` (chave de API da agência): orçamento entra como rascunho, cliente vinculado por `fredyContactId`, CPF/CNPJ ou e-mail; `externalRef` idempotente. API própria — não depende de endpoints do Frédy. |
 | CRM Frédy | Eventos estruturados e idempotentes já são gravados. Entrega por webhook genérico assinado (HMAC) ou consulta em `GET /api/v1/eventos` com chave de API. O adaptador nativo `FredyCrmAdapter` está **desativado** até a equipe Frédy definir endpoint, autenticação e contrato. Campo `fredyContactId` no cliente reservado para o vínculo. |
 | Assinatura eletrônica | Estados completos e webhook `/api/webhooks/assinatura` com validação HMAC. **Nenhum provedor contratado**: o sistema nunca marca contrato como enviado/assinado sem confirmação externa. Botão "Enviar para assinatura" fica desabilitado. |
 | Bancos | Conciliação manual com importação CSV e detecção de duplicidade. Integração automática depende de credenciais/homologação. |

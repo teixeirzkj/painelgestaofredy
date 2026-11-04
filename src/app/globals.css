@@ -1,29 +1,89 @@
 @import "tailwindcss";
 
-/* Identidade Frédy Gestão (cores provisórias definidas no briefing) */
+/*
+ * Design system Frédy Gestão
+ * Paleta oficial do redesign: azul #155EEF · marinho #102A56 · sidebar #101F3D · fundo #F5F7FB
+ * texto #172338 / #64748B · bordas #E6EBF2 · verde #16A34A · âmbar #D97706 · vermelho #DC2626
+ */
 @theme {
-  --color-brand-50: #eef4ff;
-  --color-brand-100: #dce8fd;
-  --color-brand-200: #b6cff9;
-  --color-brand-500: #2f6fdc;
-  --color-brand-600: #175cd3;
-  --color-brand-700: #124aa9;
+  --color-brand-25: #f5f8ff;
+  --color-brand-50: #eff4ff;
+  --color-brand-100: #d9e5ff;
+  --color-brand-200: #b6ccff;
+  --color-brand-300: #84adff;
+  --color-brand-400: #528bff;
+  --color-brand-500: #2970ff;
+  --color-brand-600: #155eef;
+  --color-brand-700: #0b4fd6;
+  --color-brand-800: #0b3fa8;
   --color-brand-900: #102a56;
-  --color-surface: #f7f9fc;
-  --color-ink: #0f172a;
+  --color-sidebar: #101f3d;
+  --color-sidebar-hover: #182b52;
+  --color-surface: #f5f7fb;
+  --color-ink: #172338;
   --color-muted: #64748b;
-  --color-line: #e4e9f1;
+  --color-subtle: #94a3b8;
+  --color-line: #e6ebf2;
+  --color-line-strong: #d5dce8;
   --color-success: #16a34a;
   --color-danger: #dc2626;
   --color-warning: #d97706;
-  --color-series-1: #175cd3;
+  --color-series-1: #155eef;
   --color-series-2: #eb6834;
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: var(--font-inter), "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-jakarta), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --shadow-card: 0 1px 2px rgba(16, 42, 86, 0.04), 0 1px 3px rgba(16, 42, 86, 0.03);
+  --shadow-pop: 0 12px 32px -8px rgba(16, 31, 61, 0.18), 0 4px 8px -4px rgba(16, 31, 61, 0.08);
+  --animate-fade-in: fade-in 0.18s ease-out;
+  --animate-slide-in: slide-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-pop-in: pop-in 0.16s ease-out;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-in {
+    from { transform: translateX(24px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { transform: translateY(4px) scale(0.98); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+  }
 }
 
 html, body { background: var(--color-surface); color: var(--color-ink); }
-body { -webkit-font-smoothing: antialiased; }
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 .tabular { font-variant-numeric: tabular-nums; }
+.font-display { font-family: var(--font-display); letter-spacing: -0.01em; }
+
+/* Barra de rolagem discreta */
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+/* Tooltip leve para a sidebar recolhida e ícones (data-tip) */
+[data-tip] { position: relative; }
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  background: #101f3d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 9px;
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop);
+  z-index: 60;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
 
 @media print {
   .no-print { display: none !important; }

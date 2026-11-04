@@ -1,5 +1,9 @@
 import { requirePageContext } from "@/server/auth";
 import { getCompanySettings, listAudit } from "@/server/services/settings";
+import { listCommissionRules, listCostCenters } from "@/server/services/catalog";
+import { supplierOptions } from "@/server/services/registry";
+import { can } from "@/server/context";
+import { CommissionRulesEditor, CostCentersEditor } from "@/components/catalog-editors";
 import { Card, CardHeader, PageHeader, Pagination, Table, Td, Th, Badge, Tabs } from "@/components/ui";
 import { formatDateTime } from "@/lib/dates";
 import { formatPercentBps } from "@/lib/money";
@@ -15,6 +19,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
   const tab = str(sp, "aba") ?? "agencia";
   const s = await getCompanySettings(ctx);
   const audit = tab === "auditoria" ? await listAudit(ctx, int(sp, "pagina")) : null;
+  const [rules, centers, suppliers] = tab === "cadastros" ? await Promise.all([listCommissionRules(ctx), listCostCenters(ctx), supplierOptions(ctx)]) : [[], [], []];
 
   return (
     <>
@@ -24,6 +29,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         items={[
           { key: "agencia", href: "/configuracoes?aba=agencia", label: "Agência" },
           { key: "usuarios", href: "/configuracoes?aba=usuarios", label: "Usuários e permissões" },
+          { key: "cadastros", href: "/configuracoes?aba=cadastros", label: "Comissões e centros de custo" },
           { key: "integracoes", href: "/configuracoes?aba=integracoes", label: "Integrações" },
           { key: "auditoria", href: "/configuracoes?aba=auditoria", label: "Auditoria" },
         ]}
@@ -47,6 +53,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
             />
           </div>
         </Card>
+      )}
+
+      {tab === "cadastros" && (
+        <div className="grid gap-6 xl:grid-cols-3">
+          <Card className="xl:col-span-2">
+            <CardHeader title="Regras de comissão e over" description="Por fornecedor e/ou produto. A regra mais específica é sugerida na venda (fornecedor + produto > fornecedor > produto)." />
+            <CommissionRulesEditor rules={rules} suppliers={suppliers} canManage={can(ctx, "suppliers.manage")} />
+          </Card>
+          <Card>
+            <CardHeader title="Centros de custo" description="Classificam receitas e despesas avulsas no financeiro e no relatório por centro de custo." />
+            <CostCentersEditor items={centers} canManage={can(ctx, "finance.manage")} />
+          </Card>
+        </div>
       )}
 
       {tab === "usuarios" && (
@@ -109,6 +128,27 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         upcomingDueDays: s.company.upcomingDueDays,
         upcomingTripDays: s.company.upcomingTripDays,
       }} />}
+      {tab === "integracoes" && (
+        <Card className="mt-6 max-w-3xl">
+          <CardHeader title="Jornada Frédy: atendimento → orçamento → venda" description="API própria do Frédy Gestão para receber orçamentos de qualquer sistema de atendimento (CRM, n8n, site)." />
+          <div className="space-y-3 p-5 text-sm text-slate-700">
+            <p>
+              <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">POST /api/v1/orcamentos</code> com o cabeçalho <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">Authorization: Bearer &lt;chave da agência&gt;</code>. O orçamento entra como
+              rascunho de venda, vinculado ao cliente pelo <em>fredyContactId</em>, CPF/CNPJ ou e-mail (ou cria o cadastro). A mesma <em>externalRef</em> nunca gera dois orçamentos.
+            </p>
+            <pre className="overflow-x-auto rounded-xl bg-sidebar p-4 text-xs leading-relaxed text-blue-100">{`{
+  "externalRef": "crm-123",
+  "client": { "name": "Maria Souza", "whatsapp": "42999990000", "fredyContactId": "abc" },
+  "destination": "Gramado - RS", "tripStart": "2026-12-20", "passengerCount": 2,
+  "items": [{ "productType": "PACOTE", "priceCents": 520000, "costCents": 430000 }]
+}`}</pre>
+            <p className="text-xs text-muted">
+              Os eventos da venda (confirmação, pagamentos, contrato, pré-viagem e pós-venda) seguem disponíveis em <code>GET /api/v1/eventos</code> ou pelo webhook configurado. A integração nativa com o CRM Frédy
+              depende da definição de endpoint e autenticação pela equipe Frédy e não é simulada.
+            </p>
+          </div>
+        </Card>
+      )}
 
       {tab === "auditoria" && audit && (
         <Card>

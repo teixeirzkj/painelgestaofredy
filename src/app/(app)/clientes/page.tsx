@@ -3,7 +3,7 @@ import { Users } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can } from "@/server/context";
 import { listClients } from "@/server/services/registry";
-import { Card, EmptyState, PageHeader, Pagination, Table, Td, Th } from "@/components/ui";
+import { Badge, Card, EmptyState, PageHeader, Pagination, Table, Td, Th } from "@/components/ui";
 import { FilterForm, FilterSearch, FilterSelect } from "@/components/filter-form";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -23,11 +23,11 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
     <>
       <PageHeader
         title="Clientes"
-        description={can(ctx, "clients.view_all") ? "Cadastro de clientes da agência." : "Clientes atendidos por você."}
+        description={can(ctx, "clients.view_all") ? "Clientes pessoa física e jurídica, com histórico de compras, viagens e pendências." : "Clientes atendidos por você."}
         actions={can(ctx, "clients.manage") && <NewClientButton />}
       />
       <Card>
-        <div className="border-b border-line p-3">
+        <div className="border-b border-line px-4 py-3">
           <FilterForm>
             <FilterSearch value={q} placeholder="Nome, CPF, telefone ou e-mail" />
             <FilterSelect name="arquivados" label="Situação" value={archived ? "1" : ""} options={[{ value: "1", label: "Arquivados" }]} all="Ativos" />
@@ -49,12 +49,22 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
             </thead>
             <tbody>
               {data.items.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50/60">
-                  <Td>
-                    <Link href={`/clientes/${c.id}`} className="font-medium text-brand-700 hover:underline">
-                      {c.name}
-                    </Link>
-                    {c.city && <p className="text-xs text-muted">{c.city}{c.state && `/${c.state}`}</p>}
+                <tr key={c.id}>
+                  <Td className="py-3.5">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700">
+                        {c.name.split(" ").map((x) => x[0]).slice(0, 2).join("").toUpperCase()}
+                      </span>
+                      <span className="min-w-0">
+                        <Link href={`/clientes/${c.id}`} className="font-semibold text-ink hover:text-brand-700">
+                          {c.name}
+                        </Link>
+                        <span className="flex items-center gap-1.5 text-xs text-muted">
+                          {c.personType === "PJ" && <Badge tone="violet" className="py-0 text-[10px]">PJ</Badge>}
+                          {c.city ? `${c.city}${c.state ? `/${c.state}` : ""}` : ""}
+                        </span>
+                      </span>
+                    </div>
                   </Td>
                   <Td className="text-slate-600">{maskDocument(c.document)}</Td>
                   <Td className="text-slate-600">

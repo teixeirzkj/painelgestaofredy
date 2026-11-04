@@ -15,7 +15,7 @@ export type EntryDelegate = {
   create(args: { data: Record<string, unknown> }): Promise<unknown>;
   update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
   findMany(args: { where: Record<string, unknown> }): Promise<
-    { id: string; settledCents: number; amountCents: number; status: string; description: string; notes: string | null; sourceKey: string | null }[]
+    { id: string; settledCents: number; amountCents: number; status: string; description: string; notes: string | null; sourceKey: string | null; dueDate: string; invoiceId?: string | null }[]
   >;
 };
 

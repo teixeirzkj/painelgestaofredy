@@ -1,41 +1,64 @@
+import { cookies } from "next/headers";
 import { requirePageContext } from "@/server/auth";
-import { can } from "@/server/context";
-import { Sidebar, MobileNav, type NavItem } from "@/components/shell/nav";
-import { GlobalSearch, NewSaleButton, UserMenu } from "@/components/shell/topbar";
+import { can, today } from "@/server/context";
+import { AppShell, MobileNav, type NavGroup } from "@/components/shell/nav";
+import { Breadcrumbs, DemoPill, GlobalSearch, NewSaleButton, Notifications } from "@/components/shell/topbar";
+import { getAlerts } from "@/server/services/dashboard";
 import { ROLES } from "@/lib/constants";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requirePageContext();
-  const items: NavItem[] = [
-    { href: "/", label: "Dashboard", icon: "LayoutDashboard" },
-    { href: "/vendas", label: "Vendas", icon: "ShoppingBag" },
-    { href: "/clientes", label: "Clientes", icon: "Users" },
-    ...(can(ctx, "finance.view") ? [{ href: "/financeiro", label: "Financeiro", icon: "Wallet" } as NavItem] : []),
-    ...(can(ctx, "suppliers.view") ? [{ href: "/fornecedores", label: "Fornecedores", icon: "Building2" } as NavItem] : []),
-    ...(can(ctx, "contracts.manage") ? [{ href: "/contratos", label: "Contratos", icon: "FileSignature" } as NavItem] : []),
-    ...(can(ctx, "reports.commercial") || can(ctx, "reports.financial") ? [{ href: "/relatorios", label: "Relatórios", icon: "BarChart3" } as NavItem] : []),
-    ...(can(ctx, "automations.manage") ? [{ href: "/automacoes", label: "Automações", icon: "Zap" } as NavItem] : []),
-    ...(can(ctx, "settings.manage") ? [{ href: "/configuracoes", label: "Configurações", icon: "Settings" } as NavItem] : []),
-  ];
-  return (
-    <div className="min-h-screen">
-      <Sidebar items={items} company={ctx.companyName} />
-      <div className="lg:pl-64">
-        {ctx.isDemo && (
-          <div className="no-print bg-amber-100 px-4 py-1.5 text-center text-xs font-medium text-amber-900">
-            Ambiente de demonstração: todos os clientes, vendas e valores são fictícios.
-          </div>
-        )}
-        <header className="no-print sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-white/90 px-4 backdrop-blur sm:px-6">
-          <MobileNav items={items} company={ctx.companyName} />
+  const [jar, alerts] = await Promise.all([cookies(), getAlerts(ctx, today(ctx), can(ctx, "dashboard.financeiro"))]);
+  const groups: NavGroup[] = [
+    { label: "Visão geral", items: [{ href: "/", label: "Dashboard", icon: "LayoutDashboard" }] },
+    {
+      label: "Comercial",
+      items: [
+        { href: "/vendas", label: "Vendas", icon: "ShoppingBag" },
+        { href: "/viagens", label: "Viagens", icon: "Map" },
+        { href: "/excursoes", label: "Excursões e grupos", icon: "Bus" },
+        { href: "/clientes", label: "Clientes", icon: "Users" },
+      ],
+    },
+    {
+      label: "Operação e financeiro",
+      items: [
+        ...(can(ctx, "finance.view") ? [{ href: "/financeiro", label: "Financeiro", icon: "Wallet" } as const] : []),
+        ...(can(ctx, "suppliers.view") ? [{ href: "/fornecedores", label: "Fornecedores", icon: "Building2" } as const] : []),
+        ...(can(ctx, "contracts.manage") ? [{ href: "/contratos", label: "Contratos", icon: "FileSignature" } as const] : []),
+      ],
+    },
+    {
+      label: "Gestão",
+      items: [
+        ...(can(ctx, "reports.commercial") || can(ctx, "reports.financial") ? [{ href: "/relatorios", label: "Relatórios", icon: "BarChart3" } as const] : []),
+        ...(can(ctx, "automations.manage") ? [{ href: "/automacoes", label: "Automações", icon: "Zap" } as const] : []),
+        ...(can(ctx, "settings.manage") ? [{ href: "/configuracoes", label: "Configurações", icon: "Settings" } as const] : []),
+      ],
+    },
+  ].filter((g) => g.items.length > 0) as NavGroup[];
+  const user = { name: ctx.userName, role: ROLES.label(ctx.role) };
+
+  const header = (
+    <header className="no-print sticky top-0 z-20 border-b border-line bg-white/85 backdrop-blur-md">
+      <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-3 px-4 sm:px-6 lg:px-8">
+        <MobileNav groups={groups} company={ctx.companyName} user={user} />
+        <div className="flex min-w-0 flex-1 items-center gap-6">
+          <Breadcrumbs />
           <GlobalSearch />
-          <div className="ml-auto flex items-center gap-2">
-            {can(ctx, "sales.create") && <NewSaleButton />}
-            <UserMenu name={ctx.userName} role={ROLES.label(ctx.role)} />
-          </div>
-        </header>
-        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          {ctx.isDemo && <DemoPill />}
+          <Notifications alerts={alerts} />
+          {can(ctx, "sales.create") && <NewSaleButton />}
+        </div>
       </div>
-    </div>
+    </header>
+  );
+
+  return (
+    <AppShell groups={groups} company={ctx.companyName} user={user} initialCollapsed={jar.get("fg_sidebar")?.value === "1"} header={header}>
+      {children}
+    </AppShell>
   );
 }

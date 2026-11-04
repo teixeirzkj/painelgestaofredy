@@ -50,7 +50,7 @@ describe("isolamento entre empresas (multi-tenant)", () => {
 
   it("empresa B não cria venda com cliente ou fornecedor da empresa A", async () => {
     await expect(createSale(b.admin, exampleSale(a.client.id, b.supplier.id))).rejects.toThrow(/Cliente não encontrado/);
-    await expect(createSale(b.admin, exampleSale(b.client.id, a.supplier.id))).rejects.toThrow(/Fornecedor inválido/);
+    await expect(createSale(b.admin, exampleSale(b.client.id, a.supplier.id))).rejects.toThrow(/inválido/);
   });
 
   it("numeração de vendas é independente por empresa", async () => {

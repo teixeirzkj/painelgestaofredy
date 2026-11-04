@@ -54,11 +54,11 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   if (!open) return null;
   const w = { sm: "max-w-md", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" }[size];
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[1px] sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label={title} className={cn("flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl", w)}>
+    <div className="fixed inset-0 z-50 flex animate-fade-in items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label={title} className={cn("flex max-h-[92vh] w-full animate-pop-in flex-col rounded-t-2xl bg-white shadow-[var(--shadow-pop)] sm:rounded-2xl", w)}>
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-ink">{title}</h2>
+            <h2 className="font-display text-base font-semibold text-ink">{title}</h2>
             {description && <p className="mt-0.5 text-sm text-muted">{description}</p>}
           </div>
           <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Fechar">
@@ -81,8 +81,8 @@ export function Drawer({ open, onClose, title, description, children, footer }: 
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/30" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside role="dialog" aria-modal="true" aria-label={title} className="flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
+    <div className="fixed inset-0 z-50 flex animate-fade-in justify-end bg-slate-900/30 backdrop-blur-[1px]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside role="dialog" aria-modal="true" aria-label={title} className="flex h-full w-full max-w-xl animate-slide-in flex-col bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-ink">{title}</h2>

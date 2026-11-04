@@ -3,8 +3,8 @@ import { Paperclip, Receipt } from "lucide-react";
 import type { Ctx } from "@/server/context";
 import { can, today } from "@/server/context";
 import { listPayables, listReceivables, financeOptions } from "@/server/services/finance";
-import { Card, EmptyState, Pagination, Stat, Table, Td, Th } from "@/components/ui";
-import { FilterForm, FilterSearch, FilterSelect } from "@/components/filter-form";
+import { Badge, Card, EmptyState, Pagination, Stat, Table, Td, Th } from "@/components/ui";
+import { FilterForm, FilterSearch, FilterSelect, MoreFilters } from "@/components/filter-form";
 import { EntryStatusBadge } from "@/components/status";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -13,10 +13,11 @@ import { int, str, withParams } from "@/lib/params";
 import { EntryDrawerHost, NewEntryButton } from "./entry-drawer";
 
 type SP = Record<string, string | string[] | undefined>;
+const dateCls = "h-9 rounded-lg border border-line bg-white px-2 text-sm shadow-[0_1px_1px_rgba(16,42,86,0.03)] hover:border-line-strong focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100";
 
 export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivable" | "payable"; sp: SP }) {
   const base = kind === "receivable" ? "/financeiro/receber" : "/financeiro/pagar";
-  const f = { q: str(sp, "q"), status: str(sp, "status"), from: str(sp, "de") ?? str(sp, "from"), to: str(sp, "ate") ?? str(sp, "to"), category: str(sp, "category") ?? str(sp, "categoria"), page: int(sp, "pagina") };
+  const f = { q: str(sp, "q"), status: str(sp, "status"), from: str(sp, "de") ?? str(sp, "from"), to: str(sp, "ate") ?? str(sp, "to"), category: str(sp, "category") ?? str(sp, "categoria"), costCenterId: str(sp, "centro"), invoice: str(sp, "fatura") as "sem" | "com" | undefined, sort: str(sp, "ordem"), page: int(sp, "pagina") };
   const [data, options] = await Promise.all([kind === "receivable" ? listReceivables(ctx, f) : listPayables(ctx, f), financeOptions(ctx)]);
   const cats = kind === "receivable" ? RECEIVABLE_CATEGORIES : PAYABLE_CATEGORIES;
   const canManage = can(ctx, "finance.manage");
@@ -32,7 +33,7 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
         <div className="flex items-center justify-end">{canManage && <NewEntryButton kind={kind} options={options} todayStr={today(ctx)} />}</div>
       </Card>
       <Card>
-        <div className="border-b border-line p-3">
+        <div className="border-b border-line px-4 py-3">
           <FilterForm>
             <FilterSearch value={f.q} placeholder={isRec ? "Descrição, cliente ou venda" : "Descrição, fornecedor ou venda"} />
             <FilterSelect
@@ -50,14 +51,40 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
               all="Todos (exceto cancelados)"
             />
             <FilterSelect name="category" label="Categoria" value={f.category} options={cats.values.map((v) => ({ value: v, label: cats.label(v) }))} all="Todas" />
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-muted">Vencimento de</span>
-              <input type="date" name="de" defaultValue={f.from} className="h-9 rounded-lg border border-line px-2 text-sm" />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-muted">até</span>
-              <input type="date" name="ate" defaultValue={f.to} className="h-9 rounded-lg border border-line px-2 text-sm" />
-            </label>
+            <FilterSelect
+              name="ordem"
+              label="Ordenar"
+              value={f.sort}
+              all={null}
+              options={[
+                { value: "venc_asc", label: "Vencimento (mais antigo)" },
+                { value: "venc_desc", label: "Vencimento (mais recente)" },
+                { value: "valor_desc", label: "Maior valor" },
+                { value: "valor_asc", label: "Menor valor" },
+              ]}
+            />
+            <MoreFilters active={[f.from, f.to, f.costCenterId, f.invoice].filter(Boolean).length}>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted">Vencimento de</span>
+                <input type="date" name="de" defaultValue={f.from} className={dateCls} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted">até</span>
+                <input type="date" name="ate" defaultValue={f.to} className={dateCls} />
+              </label>
+              {options.costCenters.length > 0 && <FilterSelect name="centro" label="Centro de custo" value={f.costCenterId} options={options.costCenters.map((c) => ({ value: c.id, label: c.name }))} />}
+              {!isRec && (
+                <FilterSelect
+                  name="fatura"
+                  label="Fatura de fornecedor"
+                  value={f.invoice}
+                  options={[
+                    { value: "sem", label: "Fora de faturas" },
+                    { value: "com", label: "Em faturas" },
+                  ]}
+                />
+              )}
+            </MoreFilters>
           </FilterForm>
         </div>
         {data.items.length === 0 ? (
@@ -81,7 +108,7 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
                 const party = ("client" in e && (e as { client: { name: string } | null }).client?.name) || e.supplier?.name;
                 const href = withParams(base, sp, { abrir: e.id });
                 return (
-                  <tr key={e.id} className="cursor-pointer hover:bg-slate-50/70">
+                  <tr key={e.id} className="cursor-pointer">
                     <Td className="whitespace-nowrap">
                       <Link href={href} scroll={false} className="block">
                         {formatDate(e.dueDate)}
@@ -91,8 +118,10 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
                       <Link href={href} scroll={false} className="block truncate font-medium text-ink hover:text-brand-700">
                         {e.description}
                       </Link>
-                      <span className="flex items-center gap-2 text-xs text-muted">
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
                         {cats.label(e.category)}
+                        {e.costCenter && <Badge className="py-0 text-[10px]">{e.costCenter.name}</Badge>}
+                        {"invoice" in e && (e as { invoice: { number: string } | null }).invoice && <Badge tone="blue" className="py-0 text-[10px]">fatura {(e as { invoice: { number: string } }).invoice.number}</Badge>}
                         {e.method && ` · ${PAYMENT_METHODS.label(e.method)}`}
                         {e._count.attachments > 0 && (
                           <span className="inline-flex items-center gap-0.5">
@@ -130,7 +159,7 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
         )}
         <Pagination page={data.page} pages={data.pages} total={data.total} hrefFor={(p) => withParams(base, sp, { pagina: p, abrir: undefined })} />
       </Card>
-      <EntryDrawerHost kind={kind} openId={str(sp, "abrir")} accounts={options.accounts} canManage={canManage} todayStr={today(ctx)} />
+      <EntryDrawerHost kind={kind} openId={str(sp, "abrir")} accounts={options.accounts} canManage={canManage} todayStr={today(ctx)} costCenters={options.costCenters} />
     </>
   );
 }

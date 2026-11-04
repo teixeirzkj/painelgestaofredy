@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { Plus, ShoppingBag } from "lucide-react";
+import { ShoppingBag, TrendingUp, PiggyBank, ArrowDownToLine, Hash, Map } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can } from "@/server/context";
 import { prisma } from "@/server/db";
 import { listSales } from "@/server/services/sales";
 import { sellerOptions } from "@/server/services/settings";
-import { Card, EmptyState, LinkButton, PageHeader, Pagination, Table, Td, Th, Badge } from "@/components/ui";
-import { FilterForm, FilterSearch, FilterSelect } from "@/components/filter-form";
+import { Card, EmptyState, KpiCard, LinkButton, PageHeader, Pagination, Table, Td, Th, Badge } from "@/components/ui";
+import { FilterForm, FilterSearch, FilterSelect, MoreFilters } from "@/components/filter-form";
 import { ContractStatusBadge, FinancialStatusBadge, SaleStatusBadge } from "@/components/status";
 import { formatBRL, formatPercentBps } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -15,6 +15,9 @@ import { int, str, withParams, type SearchParams } from "@/lib/params";
 import { SaleRowActions } from "./sale-actions";
 
 export const metadata = { title: "Vendas" };
+
+const dateCls =
+  "h-9 rounded-lg border border-line bg-white px-2 text-sm shadow-[0_1px_1px_rgba(16,42,86,0.03)] hover:border-line-strong focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100";
 
 export default async function SalesPage({ searchParams }: { searchParams: SearchParams }) {
   const ctx = await requirePageContext();
@@ -35,45 +38,42 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
   };
   const [data, sellers] = await Promise.all([listSales(ctx, f), can(ctx, "sales.view_all") ? sellerOptions(ctx) : Promise.resolve([])]);
   const showMargin = can(ctx, "sales.view_margin");
-  const filtered = Object.entries(f).some(([k, v]) => k !== "page" && v);
+  const filtered = Object.entries(f).some(([k, v]) => k !== "page" && k !== "sort" && v);
+  const secondary = [f.productType, f.from, f.to, f.sellerId].filter(Boolean).length;
+  const sm = data.summary;
 
   return (
     <>
-      <PageHeader
-        title="Vendas"
-        description={can(ctx, "sales.view_all") ? "Todas as vendas da agência." : "Suas vendas."}
-        actions={
-          can(ctx, "sales.create") && (
-            <LinkButton href="/vendas/nova">
-              <Plus className="h-4 w-4" /> Nova venda
-            </LinkButton>
-          )
-        }
-      />
+      <PageHeader title="Vendas" description={can(ctx, "sales.view_all") ? "Vendas da agência, com situação financeira e de contrato." : "Suas vendas, com situação financeira e de contrato."} />
+
+      <section aria-label="Resumo" className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label={filtered ? "Vendas no filtro" : "Vendas"} value={String(sm.count)} icon={Hash} hint="exceto canceladas" />
+        <KpiCard label="Total vendido" value={formatBRL(sm.grossCents)} icon={TrendingUp} tone="violet" hint={sm.count && sm.grossProfitCents !== null ? `ticket ${formatBRL(Math.round(sm.grossCents / sm.count))}` : undefined} />
+        {sm.grossProfitCents !== null ? (
+          <KpiCard label="Lucro bruto" value={formatBRL(sm.grossProfitCents)} icon={PiggyBank} tone="green" hint={sm.grossCents ? `margem ${formatPercentBps(Math.round((sm.grossProfitCents * 10000) / sm.grossCents))}` : undefined} />
+        ) : (
+          <KpiCard label="Ticket médio" value={formatBRL(sm.count ? Math.round(sm.grossCents / sm.count) : 0)} icon={PiggyBank} tone="green" hint="valor médio por venda" />
+        )}
+        <KpiCard label="A receber dos clientes" value={formatBRL(sm.openCents)} icon={ArrowDownToLine} tone="amber" hint="parcelas em aberto destas vendas" />
+      </section>
+
       {(f.pending || f.upcomingTripDays) && (
         <div className="mb-4 flex items-center gap-2 text-sm">
-          <Badge tone="amber">{f.pending ? "Vendas com informações obrigatórias pendentes" : `Viagens nos próximos ${f.upcomingTripDays} dias`}</Badge>
-          <Link href="/vendas" className="text-brand-600 hover:underline">
+          <Badge tone="amber" dot>
+            {f.pending ? "Vendas com informações obrigatórias pendentes" : `Viagens nos próximos ${f.upcomingTripDays} dias`}
+          </Badge>
+          <Link href="/vendas" className="text-xs font-medium text-brand-600 hover:underline">
             limpar
           </Link>
         </div>
       )}
+
       <Card>
-        <div className="border-b border-line p-3">
+        <div className="border-b border-line px-4 py-3">
           <FilterForm>
-            <FilterSearch value={f.q} placeholder="Código, cliente, destino, localizador" />
+            <FilterSearch value={f.q} placeholder="Código, cliente, passageiro, destino, localizador" />
             <FilterSelect name="status" label="Status" value={f.status} options={SALE_STATUS.values.map((v) => ({ value: v, label: SALE_STATUS.label(v) }))} />
-            <FilterSelect name="financeiro" label="Financeiro" value={f.financial} options={FINANCIAL_STATUS.values.map((v) => ({ value: v, label: FINANCIAL_STATUS.label(v) }))} />
-            {sellers.length > 0 && <FilterSelect name="vendedor" label="Vendedor" value={f.sellerId} options={sellers.map((s) => ({ value: s.id, label: s.name }))} />}
-            <FilterSelect name="categoria" label="Produto" value={f.productType} options={PRODUCT_TYPES.values.map((v) => ({ value: v, label: PRODUCT_TYPES.label(v) }))} />
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-muted">De</span>
-              <input type="date" name="de" defaultValue={f.from} className="h-9 rounded-lg border border-line px-2 text-sm" />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-muted">Até</span>
-              <input type="date" name="ate" defaultValue={f.to} className="h-9 rounded-lg border border-line px-2 text-sm" />
-            </label>
+            <FilterSelect name="financeiro" label="Situação financeira" value={f.financial} options={FINANCIAL_STATUS.values.map((v) => ({ value: v, label: FINANCIAL_STATUS.label(v) }))} />
             <FilterSelect
               name="ordem"
               label="Ordenar"
@@ -90,6 +90,23 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
             />
             {f.pending && <input type="hidden" name="pendencias" value="1" />}
             {f.upcomingTripDays && <input type="hidden" name="viagem" value="proximas" />}
+            <MoreFilters active={secondary}>
+              {sellers.length > 0 && <FilterSelect name="vendedor" label="Vendedor" value={f.sellerId} options={sellers.map((s) => ({ value: s.id, label: s.name }))} />}
+              <FilterSelect name="categoria" label="Produto" value={f.productType} options={PRODUCT_TYPES.values.map((v) => ({ value: v, label: PRODUCT_TYPES.label(v) }))} />
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted">Vendidas de</span>
+                <input type="date" name="de" defaultValue={f.from} className={dateCls} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted">até</span>
+                <input type="date" name="ate" defaultValue={f.to} className={dateCls} />
+              </label>
+              {filtered && (
+                <Link href="/vendas" className="mb-2 text-xs font-medium text-muted hover:text-brand-600">
+                  Limpar filtros
+                </Link>
+              )}
+            </MoreFilters>
           </FilterForm>
         </div>
         {data.items.length === 0 ? (
@@ -97,45 +114,61 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
             icon={ShoppingBag}
             title={filtered ? "Nenhuma venda encontrada" : "Nenhuma venda registrada ainda"}
             description={filtered ? "Ajuste os filtros ou a busca." : "Registre a primeira venda: o financeiro, a comissão e o contrato são preparados automaticamente."}
-            action={!filtered && can(ctx, "sales.create") ? <LinkButton href="/vendas/nova">Nova venda</LinkButton> : undefined}
+            action={!filtered && can(ctx, "sales.create") ? <LinkButton href="/vendas/nova">Registrar venda</LinkButton> : undefined}
           />
         ) : (
           <Table>
             <thead>
               <tr>
-                <Th>Código</Th>
+                <Th>Venda</Th>
                 <Th>Cliente</Th>
-                <Th>Destino</Th>
-                <Th>Vendedor</Th>
-                <Th>Data</Th>
+                <Th>Destino e viagem</Th>
+                {sellers.length > 0 && <Th>Vendedor</Th>}
                 <Th align="right">Valor total</Th>
                 {showMargin && <Th align="right">Lucro</Th>}
                 <Th>Financeiro</Th>
                 <Th>Contrato</Th>
-                <Th align="right">Ações</Th>
+                <Th align="right">
+                  <span className="sr-only">Ações</span>
+                </Th>
               </tr>
             </thead>
             <tbody>
               {data.items.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50/60">
-                  <Td>
-                    <Link href={`/vendas/${s.id}`} className="font-medium text-brand-700 hover:underline">
+                <tr key={s.id}>
+                  <Td className="py-3.5">
+                    <Link href={`/vendas/${s.id}`} className="font-semibold text-ink hover:text-brand-700">
                       {s.code}
                     </Link>
-                    <div className="mt-0.5">
-                      <SaleStatusBadge s={s.status} />
+                    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+                      <SaleStatusBadge s={s.status} /> {formatDate(s.saleDate)}
                     </div>
                   </Td>
-                  <Td className="max-w-48 truncate">{s.client.name}</Td>
-                  <Td className="max-w-40 truncate text-slate-600">{s.destination ?? "—"}</Td>
-                  <Td className="text-slate-600">{s.seller.name}</Td>
-                  <Td className="whitespace-nowrap text-slate-600">{formatDate(s.saleDate)}</Td>
-                  <Td align="right" className="font-medium">
+                  <Td className="max-w-56">
+                    <span className="block truncate font-medium text-ink">{s.client.name}</span>
+                    <span className="block truncate text-xs text-muted">
+                      {PRODUCT_TYPES.label(s.mainProductType)}
+                      {s.itemCount > 1 && ` + ${s.itemCount - 1} produto(s)`}
+                    </span>
+                  </Td>
+                  <Td className="max-w-56">
+                    <span className="block truncate text-slate-700">{s.destination ?? "—"}</span>
+                    <span className="flex items-center gap-1.5 truncate text-xs text-muted">
+                      {s.tripStart ? `embarque ${formatDate(s.tripStart)}` : "sem data de viagem"}
+                      {s.trip && (
+                        <Link href={`/viagens/${s.trip.id}`} className="inline-flex items-center gap-0.5 text-brand-600 hover:underline">
+                          <Map className="h-3 w-3" /> {s.trip.code}
+                        </Link>
+                      )}
+                    </span>
+                  </Td>
+                  {sellers.length > 0 && <Td className="whitespace-nowrap text-slate-600">{s.seller.name}</Td>}
+                  <Td align="right" className="font-semibold text-ink">
                     {formatBRL(s.grossCents)}
                   </Td>
                   {showMargin && (
                     <Td align="right">
-                      <span className={s.grossProfitCents! < 0 ? "text-danger" : ""}>{formatBRL(s.grossProfitCents)}</span>
+                      <span className={s.grossProfitCents! < 0 ? "text-danger" : "text-ink"}>{formatBRL(s.grossProfitCents)}</span>
                       <div className="text-xs text-muted">{formatPercentBps(s.marginBps ?? 0)}</div>
                     </Td>
                   )}

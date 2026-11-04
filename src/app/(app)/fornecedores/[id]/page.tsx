@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
 import { requirePageContext } from "@/server/auth";
+import { CommissionRulesEditor } from "@/components/catalog-editors";
 import { can } from "@/server/context";
 import { getSupplier } from "@/server/services/registry";
 import { Card, CardHeader, PageHeader, Stat, Table, Td, Th, Badge } from "@/components/ui";
-import { EntryStatusBadge, ReservationStatusBadge, SaleStatusBadge } from "@/components/status";
+import { EntryStatusBadge, ReservationStatusBadge, SaleStatusBadge, InvoiceStatusBadge } from "@/components/status";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { PRODUCT_TYPES, SUPPLIER_CATEGORIES } from "@/lib/constants";
@@ -158,6 +159,30 @@ export default async function SupplierPage({ params }: { params: Params }) {
             </tbody>
           </Table>
         </Card>
+        <Card>
+          <CardHeader title="Regras de comissão e over" description="Preenchidas automaticamente nas vendas deste fornecedor" />
+          <CommissionRulesEditor rules={d.rules} fixedSupplierId={s.id} canManage={can(ctx, "suppliers.manage")} />
+        </Card>
+        {d.showFinance && (
+          <Card>
+            <CardHeader title="Faturas" description="Faturas consolidadas recebidas deste fornecedor" action={<Link href={`/financeiro/faturas?fornecedor=${s.id}`} className="text-xs font-medium text-brand-600 hover:underline">Ver todas</Link>} />
+            {d.invoices.length === 0 ? (
+              <p className="px-5 py-5 text-sm text-muted">Nenhuma fatura registrada.</p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {d.invoices.map((i) => (
+                  <li key={i.id} className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm">
+                    <Link href={`/financeiro/faturas/${i.id}`} className="font-medium text-ink hover:text-brand-700">
+                      {i.number}
+                      <span className="block text-xs font-normal text-muted">vence {formatDate(i.dueDate)} · {formatBRL(i.declaredCents)}</span>
+                    </Link>
+                    <InvoiceStatusBadge s={i.status} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        )}
         {(s.notes || (d.showFinance && (s.bankInfo || s.pixKey))) && (
           <Card className="xl:col-span-2">
             <CardHeader title="Informações adicionais" />

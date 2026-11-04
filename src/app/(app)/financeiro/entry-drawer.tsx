@@ -30,7 +30,10 @@ function today() {
   return companyToday || todayIn("America/Sao_Paulo");
 }
 
-export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr }: { kind: Kind; openId?: string; accounts: { id: string; name: string }[]; canManage: boolean; todayStr: string }) {
+type Opt = { id: string; name: string };
+type EntryExtra = { costCenter?: Opt | null; invoice?: { id: string; number: string; status: string } | null };
+
+export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr, costCenters = [] }: { kind: Kind; openId?: string; accounts: Opt[]; canManage: boolean; todayStr: string; costCenters?: Opt[] }) {
   companyToday = todayStr;
   const router = useRouter();
   const pathname = usePathname();
@@ -62,7 +65,8 @@ export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr }:
 
   if (!openId) return null;
   const isRec = kind === "receivable";
-  const open = entry && entry.status !== "CANCELADO" && entry.balanceCents > 0;
+  const invoice = (entry as (Entry & EntryExtra) | null)?.invoice ?? null;
+  const open = entry && entry.status !== "CANCELADO" && entry.balanceCents > 0 && !invoice;
 
   return (
     <Drawer
@@ -95,7 +99,7 @@ export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr }:
       ) : mode === "settle" ? (
         <SettleForm kind={kind} entry={entry} accounts={accounts} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
       ) : mode === "edit" ? (
-        <EditForm kind={kind} entry={entry} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
+        <EditForm kind={kind} entry={entry} costCenters={costCenters} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
       ) : (
         <EntryDetails kind={kind} entry={entry} canManage={canManage} reload={load} onClosed={close} />
       )}
@@ -164,9 +168,23 @@ function EntryDetails({ kind, entry, canManage, reload, onClosed }: { kind: Kind
           />
         )}
         {entry.installmentNumber && <Info label="Parcela" value={`${entry.installmentNumber} de ${entry.installmentCount}`} />}
-        <Info label="Origem" value={entry.sourceKey ? <Badge tone="blue">Gerado automaticamente</Badge> : <Badge>Lançamento manual</Badge>} />
+        {(entry as Entry & EntryExtra).costCenter && <Info label="Centro de custo" value={(entry as Entry & EntryExtra).costCenter!.name} />}
+        {(entry as Entry & EntryExtra).invoice && (
+          <Info
+            label="Fatura do fornecedor"
+            value={
+              <Link className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline" href={`/financeiro/faturas/${(entry as Entry & EntryExtra).invoice!.id}`}>
+                {(entry as Entry & EntryExtra).invoice!.number} <ExternalLink className="h-3 w-3" />
+              </Link>
+            }
+          />
+        )}
+        <Info label="Origem" value={entry.sourceKey ? <Badge tone="blue">{entry.sourceKey.startsWith("ajuste:") ? "Ajuste da venda" : "Gerado automaticamente"}</Badge> : <Badge>Lançamento manual</Badge>} />
       </dl>
       {entry.notes && <p className="whitespace-pre-wrap rounded-lg border border-line p-3 text-slate-700">{entry.notes}</p>}
+      {(entry as Entry & EntryExtra).invoice && entry.status !== "PAGO" && (
+        <p className="rounded-lg bg-brand-25 p-3 text-xs text-brand-900">Este lançamento está consolidado em uma fatura do fornecedor: o pagamento é registrado pela fatura, evitando pagamento em duplicidade.</p>
+      )}
 
       <section>
         <h3 className="mb-2 font-semibold">Histórico de {isRec ? "recebimentos" : "pagamentos"}</h3>
@@ -223,12 +241,12 @@ function EntryDetails({ kind, entry, canManage, reload, onClosed }: { kind: Kind
         )}
       </section>
 
-      {canManage && entry.status !== "CANCELADO" && !entry.sourceKey && entry.settledCents === 0 && (
+      {canManage && entry.status !== "CANCELADO" && (!entry.sourceKey || entry.sourceKey.startsWith("ajuste:")) && entry.settledCents === 0 && !(entry as Entry & EntryExtra).invoice && (
         <Button variant="ghost" className="text-danger" onClick={() => setCancel(true)}>
           <Ban className="h-4 w-4" /> Cancelar lançamento
         </Button>
       )}
-      {entry.sourceKey && <p className="text-xs text-muted">Valor controlado pela venda vinculada: para alterá-lo ou cancelá-lo, edite a venda.</p>}
+      {entry.sourceKey && !entry.sourceKey.startsWith("ajuste:") && <p className="text-xs text-muted">Valor controlado pela venda vinculada: para alterá-lo ou cancelá-lo, edite a venda.</p>}
 
       <ConfirmDialog
         open={!!reverse}
@@ -336,16 +354,17 @@ function SettleForm({ kind, entry, accounts, onDone, onCancel }: { kind: Kind; e
   );
 }
 
-function EditForm({ kind, entry, onDone, onCancel }: { kind: Kind; entry: Entry; onDone: () => void; onCancel: () => void }) {
+function EditForm({ kind, entry, costCenters, onDone, onCancel }: { kind: Kind; entry: Entry; costCenters: Opt[]; onDone: () => void; onCancel: () => void }) {
   const cats = kind === "receivable" ? RECEIVABLE_CATEGORIES : PAYABLE_CATEGORIES;
-  const [d, setD] = useState({ description: entry.description, amountCents: entry.amountCents, dueDate: entry.dueDate, category: entry.category, method: entry.method ?? "", notes: entry.notes ?? "" });
+  const extra = entry as Entry & EntryExtra;
+  const [d, setD] = useState({ description: entry.description, amountCents: entry.amountCents, dueDate: entry.dueDate, category: entry.category, method: entry.method ?? "", notes: entry.notes ?? "", costCenterId: extra.costCenter?.id ?? "" });
   const { run, busy } = useAction();
   return (
     <form
       className="space-y-4"
       onSubmit={async (e) => {
         e.preventDefault();
-        await run(() => updateEntryAction(kind, entry.id, { ...d, method: d.method || null }), { onSuccess: onDone });
+        await run(() => updateEntryAction(kind, entry.id, { ...d, method: d.method || null, costCenterId: d.costCenterId || null }), { onSuccess: onDone });
       }}
     >
       <Field label="Descrição" required>
@@ -355,8 +374,8 @@ function EditForm({ kind, entry, onDone, onCancel }: { kind: Kind; entry: Entry;
         <Field label="Valor" hint={entry.sourceKey ? "Definido pela venda" : undefined}>
           <MoneyInput value={d.amountCents} onChange={(v) => setD({ ...d, amountCents: v })} disabled={!!entry.sourceKey} />
         </Field>
-        <Field label="Vencimento">
-          <Input type="date" value={d.dueDate} onChange={(e) => setD({ ...d, dueDate: e.target.value })} />
+        <Field label="Vencimento" hint={extra.invoice ? "Definido pela fatura" : undefined}>
+          <Input type="date" value={d.dueDate} disabled={!!extra.invoice} onChange={(e) => setD({ ...d, dueDate: e.target.value })} />
         </Field>
         <Field label="Categoria">
           <Select value={d.category} onChange={(e) => setD({ ...d, category: e.target.value })}>
@@ -377,6 +396,18 @@ function EditForm({ kind, entry, onDone, onCancel }: { kind: Kind; entry: Entry;
             ))}
           </Select>
         </Field>
+        {costCenters.length > 0 && (
+          <Field label="Centro de custo">
+            <Select value={d.costCenterId} onChange={(e) => setD({ ...d, costCenterId: e.target.value })}>
+              <option value="">—</option>
+              {costCenters.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
       <Field label="Observações">
         <Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} />
@@ -393,12 +424,12 @@ function EditForm({ kind, entry, onDone, onCancel }: { kind: Kind; entry: Entry;
   );
 }
 
-export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayStr: string; options: { clients: { id: string; name: string }[]; suppliers: { id: string; name: string }[] } }) {
+export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayStr: string; options: { clients: Opt[]; suppliers: Opt[]; costCenters?: Opt[] } }) {
   companyToday = todayStr;
   const [open, setOpen] = useState(false);
   const isRec = kind === "receivable";
   const cats = isRec ? RECEIVABLE_CATEGORIES : PAYABLE_CATEGORIES;
-  const init = { description: "", partyId: "", category: isRec ? "OUTRAS_RECEITAS" : "ADMINISTRATIVAS", amountCents: 0, firstDueDate: today(), installments: 1, recurringMonths: 1, method: "", notes: "", mode: "unico" as "unico" | "parcelado" | "recorrente" };
+  const init = { description: "", partyId: "", category: isRec ? "OUTRAS_RECEITAS" : "ADMINISTRATIVAS", amountCents: 0, firstDueDate: today(), installments: 1, recurringMonths: 1, method: "", notes: "", costCenterId: "", mode: "unico" as "unico" | "parcelado" | "recorrente" };
   const [d, setD] = useState(init);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { run, busy } = useAction();
@@ -412,6 +443,7 @@ export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayS
       installments: d.mode === "parcelado" ? d.installments : 1,
       method: d.method || null,
       notes: d.notes,
+      costCenterId: d.costCenterId || null,
       ...(isRec ? { clientId: d.partyId || null } : { supplierId: d.partyId || null, recurringMonths: d.mode === "recorrente" ? d.recurringMonths : 1 }),
     };
     const r = await run(() => (isRec ? createReceivableAction(payload) : createPayableAction(payload)), { onSuccess: () => (setOpen(false), setD(init)) });
@@ -496,6 +528,18 @@ export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayS
               ))}
             </Select>
           </Field>
+          {(options.costCenters?.length ?? 0) > 0 && (
+            <Field label="Centro de custo">
+              <Select value={d.costCenterId} onChange={(e) => setD({ ...d, costCenterId: e.target.value })}>
+                <option value="">—</option>
+                {options.costCenters!.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
           <Field label="Observações" className="sm:col-span-2">
             <Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} />
           </Field>

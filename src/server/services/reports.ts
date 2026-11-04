@@ -9,8 +9,9 @@ import { prisma } from "../db";
 import { assertCan, can, today, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { monthKey, monthsBetween, monthLabel, previousPeriod, type Period } from "@/lib/dates";
-import { ratioBps, sum } from "@/lib/money";
+import { formatBRL, ratioBps, sum } from "@/lib/money";
 import { saleScope } from "./sales";
+import { computeDre } from "./dre";
 import { displayStatus } from "@/lib/finance";
 import {
   ENTRY_STATUS,
@@ -19,6 +20,7 @@ import {
   SALE_STATUS,
   SUPPLIER_CATEGORIES,
   RECEIVABLE_CATEGORIES,
+  REFUND_KINDS,
 } from "@/lib/constants";
 import type { Permission } from "@/lib/permissions";
 
@@ -26,7 +28,7 @@ export type ColType = "text" | "money" | "percent" | "int" | "date";
 export type Column = { key: string; label: string; type: ColType };
 export type ReportResult = { columns: Column[]; rows: Record<string, string | number | null>[]; totals?: Record<string, number | null>; note?: string };
 
-export const REPORTS: { key: string; title: string; group: "Comercial" | "Financeiro"; permission: Permission; margin?: boolean; comparable?: boolean; description: string }[] = [
+export const REPORTS: { key: string; title: string; group: "Comercial" | "Financeiro" | "Operação"; permission: Permission; margin?: boolean; comparable?: boolean; description: string }[] = [
   { key: "vendas-periodo", title: "Vendas por período", group: "Comercial", permission: "reports.commercial", description: "Todas as vendas confirmadas no período." },
   { key: "vendas-vendedor", title: "Vendas por vendedor", group: "Comercial", permission: "reports.commercial", comparable: true, description: "Faturamento e quantidade por vendedor." },
   { key: "vendas-produto", title: "Vendas por produto", group: "Comercial", permission: "reports.commercial", comparable: true, description: "Faturamento por categoria de produto." },
@@ -40,6 +42,13 @@ export const REPORTS: { key: string; title: string; group: "Comercial" | "Financ
   { key: "comissoes", title: "Comissões", group: "Financeiro", permission: "reports.financial", description: "Comissões de vendedores das vendas do período." },
   { key: "despesas-categoria", title: "Despesas por categoria", group: "Financeiro", permission: "reports.financial", comparable: true, description: "Contas a pagar por categoria (vencimento no período)." },
   { key: "resultado-fornecedor", title: "Resultados por fornecedor", group: "Financeiro", permission: "reports.financial", description: "Volume negociado, custos, pagos e pendências por fornecedor." },
+  { key: "dre", title: "DRE gerencial", group: "Financeiro", permission: "reports.financial", margin: true, description: "Demonstrativo de resultado por competência: receitas da agência, custos, comissões e despesas." },
+  { key: "contas-vencidas", title: "Contas vencidas", group: "Financeiro", permission: "reports.financial", description: "Recebimentos e pagamentos em atraso na data de hoje (o período é ignorado)." },
+  { key: "centro-custo", title: "Lançamentos por centro de custo", group: "Financeiro", permission: "reports.financial", description: "Receitas e despesas avulsas por centro de custo (vencimento no período)." },
+  { key: "reembolsos", title: "Reembolsos e multas", group: "Financeiro", permission: "reports.financial", description: "Reembolsos e multas registrados nas vendas (vencimento no período)." },
+  { key: "comissoes-intermediarios", title: "Comissões de intermediários", group: "Financeiro", permission: "reports.financial", description: "Comissões a pagar a parceiros/intermediários das vendas do período." },
+  { key: "resultado-viagem", title: "Resultado por viagem", group: "Operação", permission: "reports.commercial", margin: true, description: "Vendas agrupadas por viagem, com valores e lucro." },
+  { key: "resultado-excursao", title: "Resultado por excursão", group: "Operação", permission: "reports.commercial", margin: true, description: "Ocupação, receitas, custos e resultado de cada excursão (saída no período)." },
 ];
 
 export function availableReports(ctx: Ctx) {
@@ -395,6 +404,194 @@ export async function runReport(ctx: Ctx, key: string, p: Period, opts: { compar
         ],
         rows,
         totals: Object.fromEntries(["count", "negotiated", "cost", "commission", "paid", "open"].map((k) => [k, sum(rows.map((r) => r[k as keyof typeof r] as number))])),
+      };
+    }
+    case "dre": {
+      const d = await computeDre(ctx.companyId, p);
+      const rows = d.lines.map((l) => ({
+        line: `${"   ".repeat(l.level)}${l.kind === "minus" ? "(−) " : l.kind === "plus" ? "(+) " : l.kind === "total" ? "(=) " : ""}${l.label}`,
+        amount: l.kind === "minus" ? -l.amountCents : l.amountCents,
+        share: d.netRevenue ? ratioBps(l.kind === "minus" ? -l.amountCents : l.amountCents, d.netRevenue) : null,
+      }));
+      return {
+        columns: [
+          { key: "line", label: "Conta", type: "text" },
+          { key: "amount", label: "Valor", type: "money" },
+          { key: "share", label: "% da receita líquida", type: "percent" },
+        ],
+        rows,
+        note: "Vendas pela data da venda; despesas e outras receitas pela data de vencimento. Reembolsos são repasses e não entram no resultado. Custos e comissões gerados pelas vendas são considerados uma única vez.",
+      };
+    }
+    case "contas-vencidas": {
+      const [recs, pays] = await Promise.all([
+        prisma.receivable.findMany({ where: { companyId: ctx.companyId, status: { in: ["PENDENTE", "PARCIAL"] }, dueDate: { lt: t } }, include: { client: { select: { name: true } }, supplier: { select: { name: true } }, sale: { select: { code: true } } } }),
+        prisma.payable.findMany({ where: { companyId: ctx.companyId, status: { in: ["PENDENTE", "PARCIAL"] }, dueDate: { lt: t } }, include: { client: { select: { name: true } }, supplier: { select: { name: true } }, sale: { select: { code: true } } } }),
+      ]);
+      const days = (d: string) => Math.round((Date.parse(t) - Date.parse(d)) / 86400000);
+      const rows = [
+        ...recs.map((r) => ({ type: "A receber", due: r.dueDate, days: days(r.dueDate), description: r.description, party: r.client?.name ?? r.supplier?.name ?? "—", sale: r.sale?.code ?? "", balance: r.amountCents - r.settledCents })),
+        ...pays.map((r) => ({ type: "A pagar", due: r.dueDate, days: days(r.dueDate), description: r.description, party: r.supplier?.name ?? r.client?.name ?? "—", sale: r.sale?.code ?? "", balance: r.amountCents - r.settledCents })),
+      ].sort((a, b) => a.due.localeCompare(b.due));
+      return {
+        columns: [
+          { key: "type", label: "Tipo", type: "text" },
+          { key: "due", label: "Vencimento", type: "date" },
+          { key: "days", label: "Dias em atraso", type: "int" },
+          { key: "description", label: "Descrição", type: "text" },
+          { key: "party", label: "Cliente/Fornecedor", type: "text" },
+          { key: "sale", label: "Venda", type: "text" },
+          { key: "balance", label: "Saldo", type: "money" },
+        ],
+        rows,
+        totals: { balance: sum(rows.map((r) => r.balance)) },
+        note: `Posição em ${t.split("-").reverse().join("/")}. A receber em atraso: ${formatBRL(sum(rows.filter((r) => r.type === "A receber").map((r) => r.balance)))} · A pagar em atraso: ${formatBRL(sum(rows.filter((r) => r.type === "A pagar").map((r) => r.balance)))}.`,
+      };
+    }
+    case "centro-custo": {
+      const [recs, pays, centers] = await Promise.all([
+        prisma.receivable.findMany({ where: { companyId: ctx.companyId, status: { not: "CANCELADO" }, dueDate: { gte: p.from, lte: p.to } }, select: { costCenterId: true, amountCents: true, settledCents: true } }),
+        prisma.payable.findMany({ where: { companyId: ctx.companyId, status: { not: "CANCELADO" }, dueDate: { gte: p.from, lte: p.to } }, select: { costCenterId: true, amountCents: true, settledCents: true } }),
+        prisma.costCenter.findMany({ where: { companyId: ctx.companyId } }),
+      ]);
+      const label = new Map(centers.map((c) => [c.id, c.name]));
+      const keys = [...new Set([...recs, ...pays].map((x) => x.costCenterId ?? ""))];
+      const rows = keys
+        .map((k) => {
+          const r = recs.filter((x) => (x.costCenterId ?? "") === k);
+          const pp = pays.filter((x) => (x.costCenterId ?? "") === k);
+          const income = sum(r.map((x) => x.amountCents));
+          const expense = sum(pp.map((x) => x.amountCents));
+          return { center: k ? label.get(k) ?? "—" : "Sem centro de custo", income, expense, net: income - expense, open: sum(r.map((x) => x.amountCents - x.settledCents)) - sum(pp.map((x) => x.amountCents - x.settledCents)) };
+        })
+        .sort((a, b) => (a.center === "Sem centro de custo" ? 1 : b.center === "Sem centro de custo" ? -1 : b.expense - a.expense));
+      return {
+        columns: [
+          { key: "center", label: "Centro de custo", type: "text" },
+          { key: "income", label: "Receitas", type: "money" },
+          { key: "expense", label: "Despesas", type: "money" },
+          { key: "net", label: "Saldo", type: "money" },
+          { key: "open", label: "Em aberto (líquido)", type: "money" },
+        ],
+        rows,
+        totals: Object.fromEntries(["income", "expense", "net", "open"].map((k) => [k, sum(rows.map((r) => r[k as keyof typeof r] as number))])),
+      };
+    }
+    case "reembolsos": {
+      const where = { companyId: ctx.companyId, origin: "AJUSTE_VENDA", status: { not: "CANCELADO" }, dueDate: { gte: p.from, lte: p.to } };
+      const inc = { sale: { select: { code: true, client: { select: { name: true } } } }, supplier: { select: { name: true } } };
+      const [pays, recs] = await Promise.all([prisma.payable.findMany({ where, include: inc }), prisma.receivable.findMany({ where, include: inc })]);
+      const rows = [...pays, ...recs]
+        .map((x) => ({
+          date: x.dueDate,
+          sale: x.sale?.code ?? "",
+          client: x.sale?.client.name ?? "",
+          kind: REFUND_KINDS.label(x.category),
+          supplier: x.supplier?.name ?? "",
+          amount: x.amountCents,
+          settled: x.settledCents,
+          status: ENTRY_STATUS.label(displayStatus(x.status, x.dueDate, t)),
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      return {
+        columns: [
+          { key: "date", label: "Vencimento", type: "date" },
+          { key: "sale", label: "Venda", type: "text" },
+          { key: "client", label: "Cliente", type: "text" },
+          { key: "kind", label: "Tipo", type: "text" },
+          { key: "supplier", label: "Fornecedor", type: "text" },
+          { key: "amount", label: "Valor", type: "money" },
+          { key: "settled", label: "Baixado", type: "money" },
+          { key: "status", label: "Status", type: "text" },
+        ],
+        rows,
+        totals: { amount: sum(rows.map((r) => r.amount)), settled: sum(rows.map((r) => r.settled)) },
+      };
+    }
+    case "comissoes-intermediarios": {
+      const sales = await prisma.sale.findMany({
+        where: { companyId: ctx.companyId, status: confirmed, intermediaryCommissionCents: { gt: 0 }, saleDate: { gte: p.from, lte: p.to } },
+        include: { intermediary: { select: { name: true } }, payables: { where: { origin: "COMISSAO_INTERMEDIARIO" }, select: { dueDate: true, paidCents: true, status: true } } },
+        orderBy: { saleDate: "asc" },
+      });
+      const rows = sales.map((s) => ({
+        intermediary: s.intermediary?.name ?? "—",
+        sale: s.code,
+        date: s.saleDate,
+        gross: s.grossCents,
+        amount: s.intermediaryCommissionCents,
+        due: s.payables[0]?.dueDate ?? "",
+        paid: s.payables[0]?.paidCents ?? 0,
+      }));
+      return {
+        columns: [
+          { key: "intermediary", label: "Intermediário", type: "text" },
+          { key: "sale", label: "Venda", type: "text" },
+          { key: "date", label: "Data da venda", type: "date" },
+          { key: "gross", label: "Valor da venda", type: "money" },
+          { key: "amount", label: "Comissão", type: "money" },
+          { key: "due", label: "Vencimento", type: "date" },
+          { key: "paid", label: "Pago", type: "money" },
+        ],
+        rows,
+        totals: { gross: sum(rows.map((r) => r.gross)), amount: sum(rows.map((r) => r.amount)), paid: sum(rows.map((r) => r.paid)) },
+      };
+    }
+    case "resultado-viagem": {
+      const trips = await prisma.trip.findMany({
+        where: { companyId: ctx.companyId, sales: { some: { ...saleScope(ctx), status: confirmed, saleDate: { gte: p.from, lte: p.to } } } },
+        include: { client: { select: { name: true } }, sales: { where: { ...saleScope(ctx), status: confirmed } } },
+      });
+      const rows = trips.map((tr) => {
+        const gross = sum(tr.sales.map((x) => x.grossCents));
+        const profit = sum(tr.sales.map((x) => x.grossProfitCents));
+        const dates = tr.sales.map((x) => x.tripStart).filter(Boolean).sort() as string[];
+        return { code: tr.code, title: tr.title, client: tr.client.name, start: dates[0] ?? "", count: tr.sales.length, gross, revenue: sum(tr.sales.map((x) => x.agencyRevenueCents)), profit, margin: ratioBps(profit, gross) };
+      });
+      return {
+        columns: [
+          { key: "code", label: "Viagem", type: "text" },
+          { key: "title", label: "Descrição", type: "text" },
+          { key: "client", label: "Cliente", type: "text" },
+          { key: "start", label: "Início", type: "date" },
+          { key: "count", label: "Vendas", type: "int" },
+          { key: "gross", label: "Faturamento", type: "money" },
+          { key: "revenue", label: "Receita própria", type: "money" },
+          { key: "profit", label: "Lucro bruto", type: "money" },
+          { key: "margin", label: "Margem", type: "percent" },
+        ],
+        rows,
+        totals: { count: sum(rows.map((r) => r.count)), gross: sum(rows.map((r) => r.gross)), revenue: sum(rows.map((r) => r.revenue)), profit: sum(rows.map((r) => r.profit)), margin: ratioBps(sum(rows.map((r) => r.profit)), sum(rows.map((r) => r.gross))) },
+      };
+    }
+    case "resultado-excursao": {
+      const excs = await prisma.excursion.findMany({
+        where: { companyId: ctx.companyId, startDate: { gte: p.from, lte: p.to } },
+        include: { sales: { where: { status: { not: "CANCELADA" } } }, payables: { where: { status: { not: "CANCELADO" } } } },
+        orderBy: { startDate: "asc" },
+      });
+      const rows = excs.map((e) => {
+        const gross = sum(e.sales.map((x) => x.grossCents));
+        const costs = sum(e.payables.map((x) => x.amountCents));
+        const result = sum(e.sales.map((x) => x.grossProfitCents)) - costs;
+        const booked = sum(e.sales.map((x) => x.passengerCount));
+        return { code: e.code, name: e.name, start: e.startDate, seats: e.seats, booked, occupancy: ratioBps(booked, e.seats), gross, costs, result, margin: ratioBps(result, gross) };
+      });
+      return {
+        columns: [
+          { key: "code", label: "Excursão", type: "text" },
+          { key: "name", label: "Nome", type: "text" },
+          { key: "start", label: "Saída", type: "date" },
+          { key: "seats", label: "Vagas", type: "int" },
+          { key: "booked", label: "Passageiros", type: "int" },
+          { key: "occupancy", label: "Ocupação", type: "percent" },
+          { key: "gross", label: "Vendido", type: "money" },
+          { key: "costs", label: "Custos da operação", type: "money" },
+          { key: "result", label: "Resultado", type: "money" },
+          { key: "margin", label: "Margem", type: "percent" },
+        ],
+        rows,
+        totals: { seats: sum(rows.map((r) => r.seats)), booked: sum(rows.map((r) => r.booked)), gross: sum(rows.map((r) => r.gross)), costs: sum(rows.map((r) => r.costs)), result: sum(rows.map((r) => r.result)) },
       };
     }
   }

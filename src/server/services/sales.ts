@@ -2,8 +2,9 @@ import { prisma, type Tx, Prisma } from "../db";
 import { assertCan, can, today, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
-import { saleInputSchema, type SaleParsed } from "./schemas";
-import { calculateSale, entryStatus, validateSaleFinancials, type SellerCommissionRule } from "@/lib/finance";
+import { saleInputSchema, refundSchema, type SaleParsed } from "./schemas";
+import { calculateSale, entryStatus, supplierRemittance, validateSaleFinancials, type SellerCommissionRule } from "@/lib/finance";
+import { REFUND_KINDS, type CommercialModel } from "@/lib/constants";
 import { addDays, addMonths, startOfMonth } from "@/lib/dates";
 import { sum } from "@/lib/money";
 import { newKey } from "@/lib/utils";
@@ -11,7 +12,7 @@ import { emitEvent } from "./automations";
 import { prepareContractForSale } from "./contracts";
 import { textContains, entryDelegate } from "./query";
 
-export type PlanItem = { key: string; dueDate: string; amountCents: number; method: string; description: string | null };
+export type PlanItem = { key: string; dueDate: string; amountCents: number; method: string; description: string | null; payerClientId?: string | null };
 
 // ---------------------------------------------------------------------------
 // Visibilidade
@@ -33,13 +34,38 @@ async function getEditableSale(tx: Tx, ctx: Ctx, id: string) {
 // Validação de entrada e regras
 // ---------------------------------------------------------------------------
 
-async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed) {
+async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string) {
   const client = await tx.client.findFirst({ where: { id: input.clientId, companyId: ctx.companyId, archivedAt: null } });
   if (!client) throw new AppError("Cliente não encontrado.", "VALIDATION", [{ field: "clientId", message: "Selecione um cliente válido." }]);
-  const supplierIds = [...new Set(input.items.map((i) => i.supplierId).filter(Boolean))] as string[];
+  const supplierIds = [...new Set([...input.items.flatMap((i) => [i.supplierId, i.operatorId]), input.intermediaryId].filter(Boolean))] as string[];
   if (supplierIds.length) {
     const count = await tx.supplier.count({ where: { id: { in: supplierIds }, companyId: ctx.companyId } });
-    if (count !== supplierIds.length) throw new AppError("Fornecedor inválido em um dos produtos.");
+    if (count !== supplierIds.length) throw new AppError("Fornecedor, operadora ou intermediário inválido.");
+  }
+  if (input.intermediaryCommissionCents > 0 && !input.intermediaryId)
+    throw new AppError("Selecione o intermediário que receberá a comissão.", "VALIDATION", [{ field: "intermediaryId", message: "Selecione o intermediário." }]);
+  // Pagantes e passageiros vinculados a cadastros precisam ser da mesma empresa
+  const personIds = [...new Set([...input.payments.map((p) => p.payerClientId), ...input.passengers.map((p) => p.clientId)].filter(Boolean))] as string[];
+  if (personIds.length) {
+    const count = await tx.client.count({ where: { id: { in: personIds }, companyId: ctx.companyId } });
+    if (count !== personIds.length) throw new AppError("Pagante ou passageiro inválido.");
+  }
+  if (input.tripId) {
+    const trip = await tx.trip.findFirst({ where: { id: input.tripId, companyId: ctx.companyId, cancelledAt: null } });
+    if (!trip) throw new AppError("Viagem não encontrada.");
+    if (trip.clientId !== input.clientId)
+      throw new AppError("A viagem selecionada pertence a outro cliente.", "VALIDATION", [{ field: "tripId", message: "A viagem deve ser do mesmo cliente da venda." }]);
+  }
+  if (input.excursionId) {
+    const exc = await tx.excursion.findFirst({ where: { id: input.excursionId, companyId: ctx.companyId } });
+    if (!exc || exc.status === "CANCELADA") throw new AppError("Excursão não encontrada ou cancelada.");
+    const booked = await tx.sale.aggregate({
+      where: { excursionId: exc.id, companyId: ctx.companyId, status: { not: "CANCELADA" }, ...(saleId ? { id: { not: saleId } } : {}) },
+      _sum: { passengerCount: true },
+    });
+    const free = exc.seats - (booked._sum.passengerCount ?? 0);
+    if (input.passengerCount > free)
+      throw new AppError(`A excursão tem apenas ${Math.max(free, 0)} vaga(s) disponível(is).`, "VALIDATION", [{ field: "passengerCount", message: "Vagas insuficientes na excursão." }]);
   }
   let sellerId = ctx.userId;
   if (input.sellerId && input.sellerId !== ctx.userId) {
@@ -53,7 +79,7 @@ async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed) {
 
 function computeTotals(input: SaleParsed) {
   const commission: SellerCommissionRule = input.commission;
-  const totals = calculateSale(input.items, input.feesCents, input.discountCents, commission);
+  const totals = calculateSale(input.items, input.feesCents, input.discountCents, commission, input.intermediaryCommissionCents);
   const issues = validateSaleFinancials(input.items, input.feesCents, input.discountCents, totals, sum(input.payments.map((p) => p.amountCents)));
   // Rascunho pode ficar sem plano de pagamento; confirmação exige plano fechando com o valor cobrado.
   const relevant = input.confirm ? issues : issues.filter((i) => i.field !== "payments" || input.payments.length > 0);
@@ -69,7 +95,7 @@ function mainProductType(input: SaleParsed) {
 }
 
 function saleData(input: SaleParsed, totals: ReturnType<typeof calculateSale>) {
-  const plan: PlanItem[] = input.payments.map((p) => ({ ...p, description: p.description ?? null }));
+  const plan: PlanItem[] = input.payments.map((p) => ({ ...p, description: p.description ?? null, payerClientId: p.payerClientId ?? null }));
   return {
     saleDate: input.saleDate,
     clientId: input.clientId,
@@ -82,6 +108,9 @@ function saleData(input: SaleParsed, totals: ReturnType<typeof calculateSale>) {
     notes: input.notes,
     feesCents: input.feesCents,
     discountCents: input.discountCents,
+    tripId: input.tripId,
+    excursionId: input.excursionId,
+    intermediaryId: input.intermediaryId,
     ...totals,
     paymentPlanJson: JSON.stringify(plan),
   };
@@ -99,6 +128,9 @@ type Desired = {
   method?: string | null;
   installmentNumber?: number | null;
   installmentCount?: number | null;
+  clientId?: string | null;
+  supplierId?: string | null;
+  category?: string;
 };
 
 const money = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -113,7 +145,7 @@ async function syncEntries(
   tx: Tx,
   kind: "receivable" | "payable",
   ctx: Ctx,
-  existing: { id: string; sourceKey: string | null; settledCents: number; status: string; description: string }[],
+  existing: { id: string; sourceKey: string | null; settledCents: number; status: string; description: string; invoiceId?: string | null }[],
   desired: Desired[],
   base: Record<string, unknown>,
 ) {
@@ -134,9 +166,11 @@ async function syncEntries(
         `"${e.description}" já possui ${money(e.settledCents)} baixado; o novo valor (${money(d.amountCents)}) não pode ser menor. Estorne a baixa antes.`,
         "CONFLICT",
       );
+    // Lançamento já consolidado em fatura de fornecedor: o vencimento passa a ser o da fatura.
+    const data = e.invoiceId ? { ...base, ...d, dueDate: undefined } : { ...base, ...d };
     await model.update({
       where: { id: e.id },
-      data: { ...base, ...d, status: entryStatus(d.amountCents, e.settledCents, false), cancelledAt: null },
+      data: { ...data, status: entryStatus(d.amountCents, e.settledCents, false), cancelledAt: null },
     });
   }
 
@@ -158,9 +192,13 @@ export function commissionDueDate(saleDate: string, payDay: number) {
 export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
   const sale = await tx.sale.findFirstOrThrow({
     where: { id: saleId, companyId: ctx.companyId },
-    include: { items: { include: { supplier: true } }, client: true, seller: true, company: true },
+    include: { items: { include: { supplier: true, operator: true } }, client: true, seller: true, company: true, intermediary: true },
   });
   const plan = JSON.parse(sale.paymentPlanJson) as PlanItem[];
+  const payerIds = [...new Set(plan.map((p) => p.payerClientId).filter(Boolean))] as string[];
+  const payers = new Map(
+    (await tx.client.findMany({ where: { id: { in: payerIds }, companyId: ctx.companyId }, select: { id: true, name: true } })).map((c) => [c.id, c.name]),
+  );
 
   // 1) Contas a receber do cliente (parcelas)
   const existingRec = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "VENDA" } });
@@ -174,11 +212,12 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
       amountCents: p.amountCents,
       dueDate: p.dueDate,
       method: p.method,
-      description: p.description || `${sale.code} · ${sale.client.name} · Parcela ${i + 1}/${plan.length}`,
+      description: p.description || `${sale.code} · ${(p.payerClientId && payers.get(p.payerClientId)) || sale.client.name} · Parcela ${i + 1}/${plan.length}`,
       installmentNumber: i + 1,
       installmentCount: plan.length,
+      clientId: p.payerClientId && payers.has(p.payerClientId) ? p.payerClientId : sale.clientId,
     })),
-    { origin: "VENDA", saleId, clientId: sale.clientId, category: "VENDAS" },
+    { origin: "VENDA", saleId, category: "VENDAS" },
   );
 
   // 2) Contas a pagar a fornecedores (custos dos itens em intermediação/revenda)
@@ -197,10 +236,10 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
           sourceKey: key,
           amountCents: item.costCents,
           dueDate: item.supplierDueDate ?? (defaultSupplierDue < sale.saleDate ? sale.saleDate : defaultSupplierDue),
-          description: `${sale.code} · ${item.supplier?.name ?? "Fornecedor"} · ${item.description ?? item.productType}`,
+          description: `${sale.code} · ${(item.operator ?? item.supplier)?.name ?? "Fornecedor"} · ${item.description ?? item.productType}`,
         },
       ],
-      { origin: "CUSTO_VENDA", saleId, saleItemId: item.id, supplierId: item.supplierId, category: "FORNECEDORES" },
+      { origin: "CUSTO_VENDA", saleId, saleItemId: item.id, supplierId: item.operatorId ?? item.supplierId, category: "FORNECEDORES" },
     );
   }
   const keptCostKeys = new Set(costItems.map((i) => `item:${i.id}:custo`));
@@ -208,9 +247,17 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
 
   // 3) Comissões a receber de fornecedores (modelo COMISSAO)
   const existingSupComm = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "COMISSAO_FORNECEDOR" } });
-  const commItems = sale.items.filter((i) => i.commercialModel === "COMISSAO" && i.supplierCommissionCents > 0);
-  for (const item of commItems) {
-    const key = `item:${item.id}:comissao`;
+  // COMISSAO: o fornecedor repassa comissão + over + RAV/DU − taxa CC. Demais modelos: apenas o over.
+  const remits = sale.items
+    .map((item) => ({
+      item,
+      amount: supplierRemittance({ ...item, commercialModel: item.commercialModel as CommercialModel }),
+      key: `item:${item.id}:${item.commercialModel === "COMISSAO" ? "comissao" : "over"}`,
+    }))
+    .filter((r) => r.amount > 0);
+  for (const { item, amount, key } of remits) {
+    const isComm = item.commercialModel === "COMISSAO";
+    const who = (item.operator ?? item.supplier)?.name ?? "fornecedor";
     await syncEntries(
       tx,
       "receivable",
@@ -219,15 +266,16 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
       [
         {
           sourceKey: key,
-          amountCents: item.supplierCommissionCents,
+          amountCents: amount,
           dueDate: item.supplierDueDate ?? addDays(sale.tripEnd ?? sale.saleDate, 30),
-          description: `${sale.code} · Comissão ${item.supplier?.name ?? "fornecedor"}`,
+          description: `${sale.code} · ${isComm ? "Comissão" : "Over"} ${who}`,
+          category: isComm ? "COMISSAO_FORNECEDOR" : "OVER",
         },
       ],
-      { origin: "COMISSAO_FORNECEDOR", saleId, supplierId: item.supplierId, category: "COMISSAO_FORNECEDOR" },
+      { origin: "COMISSAO_FORNECEDOR", saleId, supplierId: item.operatorId ?? item.supplierId },
     );
   }
-  const keptCommKeys = new Set(commItems.map((i) => `item:${i.id}:comissao`));
+  const keptCommKeys = new Set(remits.map((r) => r.key));
   await syncEntries(tx, "receivable", ctx, existingSupComm.filter((r) => !keptCommKeys.has(r.sourceKey ?? "")), [], {});
 
   // 4) Comissão do vendedor: um registro de comissão + uma conta a pagar (sem duplicar despesa)
@@ -256,6 +304,27 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
     { origin: "COMISSAO_VENDEDOR", saleId, commissionId: commission.id, category: "COMISSOES" },
   );
   await refreshCommissionStatus(tx, commission.id);
+
+  // 4b) Comissão do intermediário (parceiro/freelancer): uma conta a pagar
+  const interKey = `intermediario:${saleId}`;
+  await syncEntries(
+    tx,
+    "payable",
+    ctx,
+    await tx.payable.findMany({ where: { companyId: ctx.companyId, sourceKey: interKey } }),
+    sale.intermediaryCommissionCents > 0 && sale.intermediaryId
+      ? [
+          {
+            sourceKey: interKey,
+            amountCents: sale.intermediaryCommissionCents,
+            dueDate: commissionDueDate(sale.saleDate, sale.company.commissionPayDay),
+            description: `Comissão intermediário ${sale.intermediary?.name ?? ""} · ${sale.code}`,
+            supplierId: sale.intermediaryId,
+          },
+        ]
+      : [],
+    { origin: "COMISSAO_INTERMEDIARIO", saleId, category: "COMISSOES" },
+  );
 
   // 5) Reservas (informações operacionais por produto)
   for (const item of sale.items) {
@@ -314,7 +383,7 @@ function emitConfirmed(tx: Tx, ctx: Ctx, saleId: string, code: string, client: {
   });
 }
 
-export async function createSale(ctx: Ctx, raw: unknown) {
+export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API"; externalRef: string }) {
   assertCan(ctx, "sales.create");
   const input = saleInputSchema.parse(raw);
   const totals = computeTotals(input);
@@ -331,6 +400,8 @@ export async function createSale(ctx: Ctx, raw: unknown) {
         code,
         sellerId,
         createdById: ctx.userId,
+        origin: meta?.origin ?? "MANUAL",
+        externalRef: meta?.externalRef ?? null,
         status,
         confirmedAt: input.confirm ? new Date() : null,
         ...saleData(input, totals),
@@ -346,6 +417,11 @@ export async function createSale(ctx: Ctx, raw: unknown) {
             supplierCommissionCents: i.commercialModel === "COMISSAO" ? i.supplierCommissionCents : 0,
             supplierDueDate: i.supplierDueDate,
             locator: i.locator,
+            operatorId: i.operatorId,
+            ravCents: i.ravCents,
+            duCents: i.duCents,
+            overCents: i.overCents,
+            cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
             sortOrder: idx,
           })),
         },
@@ -369,7 +445,7 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
     if (sale.status === "CANCELADA") throw new AppError("Venda cancelada não pode ser alterada.");
     const willBeConfirmed = sale.status !== "ORCAMENTO" || input.confirm;
     const totals = computeTotals({ ...input, confirm: willBeConfirmed });
-    const { client, sellerId } = await validateRefs(tx, ctx, { ...input, sellerId: input.sellerId ?? sale.sellerId });
+    const { client, sellerId } = await validateRefs(tx, ctx, { ...input, sellerId: input.sellerId ?? sale.sellerId }, id);
 
     // Itens: atualiza os que mantêm id, cria novos e remove os excluídos.
     const keepIds = new Set(input.items.map((i) => i.id).filter(Boolean) as string[]);
@@ -386,6 +462,11 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
         supplierCommissionCents: i.commercialModel === "COMISSAO" ? i.supplierCommissionCents : 0,
         supplierDueDate: i.supplierDueDate,
         locator: i.locator,
+        operatorId: i.operatorId,
+        ravCents: i.ravCents,
+        duCents: i.duCents,
+        overCents: i.overCents,
+        cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
         sortOrder: idx,
       };
       if (i.id) await tx.saleItem.update({ where: { id: i.id }, data });
@@ -482,6 +563,10 @@ export async function duplicateSale(ctx: Ctx, id: string) {
     notes: `Duplicada de ${sale.code}`,
     feesCents: sale.feesCents,
     discountCents: sale.discountCents,
+    tripId: sale.tripId,
+    excursionId: sale.excursionId,
+    intermediaryId: sale.intermediaryId,
+    intermediaryCommissionCents: sale.intermediaryCommissionCents,
     commission: { mode: "VALOR", amountCents: sale.sellerCommissionCents },
     items: sale.items.map((i) => ({
       productType: i.productType,
@@ -493,6 +578,11 @@ export async function duplicateSale(ctx: Ctx, id: string) {
       supplierCommissionCents: i.supplierCommissionCents,
       supplierDueDate: null,
       locator: null,
+      operatorId: i.operatorId,
+      ravCents: i.ravCents,
+      duCents: i.duCents,
+      overCents: i.overCents,
+      cardFeeCents: i.cardFeeCents,
     })),
     payments: plan.map((p) => ({ ...p, key: newKey(), dueDate: today(ctx) })),
     passengers: [],
@@ -513,7 +603,7 @@ export function saleFinancialStatus(
 ): SaleFinancialStatus {
   if (saleStatus === "CANCELADA") return "CANCELADO";
   const active = receivables.filter((r) => r.status !== "CANCELADO");
-  if (active.length === 0) return saleStatus === "ORCAMENTO" ? "SEM_COBRANCA" : "QUITADO";
+  if (active.length === 0) return saleStatus === "ORCAMENTO" || receivables.length === 0 ? "SEM_COBRANCA" : "QUITADO";
   if (active.every((r) => r.status === "PAGO")) return "QUITADO";
   if (active.some((r) => r.status !== "PAGO" && r.dueDate < t)) return "ATRASADO";
   if (active.some((r) => r.settledCents > 0)) return "PARCIAL";
@@ -533,6 +623,8 @@ export type SaleListFilters = {
   pageSize?: number;
   pending?: boolean; // vendas confirmadas sem informações obrigatórias
   upcomingTripDays?: number; // viagens nos próximos N dias
+  tripId?: string;
+  excursionId?: string;
 };
 
 export async function listSales(ctx: Ctx, f: SaleListFilters) {
@@ -545,6 +637,8 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
     AND: extra,
     ...saleScope(ctx),
     ...(f.status ? { status: f.status } : {}),
+    ...(f.tripId ? { tripId: f.tripId } : {}),
+    ...(f.excursionId ? { excursionId: f.excursionId } : {}),
     ...(f.sellerId && can(ctx, "sales.view_all") ? { sellerId: f.sellerId } : {}),
     ...(f.productType ? { items: { some: { productType: f.productType } } } : {}),
     ...(f.from || f.to ? { saleDate: { ...(f.from ? { gte: f.from } : {}), ...(f.to ? { lte: f.to } : {}) } } : {}),
@@ -555,6 +649,8 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
             { destination: textContains(f.q) },
             { locator: textContains(f.q) },
             { client: { name: textContains(f.q) } },
+            { passengers: { some: { name: textContains(f.q) } } },
+            { items: { some: { locator: textContains(f.q) } } },
           ],
         }
       : {}),
@@ -581,6 +677,8 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
       seller: { select: { id: true, name: true } },
       receivables: { where: { origin: "VENDA" }, select: { amountCents: true, settledCents: true, status: true, dueDate: true } },
       contracts: { select: { status: true } },
+      trip: { select: { id: true, code: true } },
+      _count: { select: { items: true } },
     },
     ...(f.financial ? {} : { skip: (page - 1) * pageSize, take: pageSize }),
   });
@@ -598,6 +696,9 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
     marginBps: can(ctx, "sales.view_margin") ? s.marginBps : null,
     financialStatus: saleFinancialStatus(s.status, s.receivables, t),
     contractStatus: s.contracts[0]?.status ?? "NAO_GERADO",
+    trip: s.trip,
+    itemCount: s._count.items,
+    tripStart: s.tripStart,
   }));
   let total: number;
   if (f.financial) {
@@ -607,7 +708,20 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
   } else {
     total = await prisma.sale.count({ where });
   }
-  return { items: mapped, total, page, pages: Math.max(1, Math.ceil(total / pageSize)) };
+  const [agg, openRec] = await Promise.all([
+    prisma.sale.aggregate({ where: { AND: [where, { status: { not: "CANCELADA" } }] }, _sum: { grossCents: true, grossProfitCents: true }, _count: { _all: true } }),
+    prisma.receivable.aggregate({
+      where: { companyId: ctx.companyId, origin: "VENDA", status: { in: ["PENDENTE", "PARCIAL"] }, sale: where },
+      _sum: { amountCents: true, settledCents: true },
+    }),
+  ]);
+  const summary = {
+    count: agg._count._all,
+    grossCents: agg._sum.grossCents ?? 0,
+    grossProfitCents: can(ctx, "sales.view_margin") ? (agg._sum.grossProfitCents ?? 0) : null,
+    openCents: (openRec._sum.amountCents ?? 0) - (openRec._sum.settledCents ?? 0),
+  };
+  return { items: mapped, total, page, pages: Math.max(1, Math.ceil(total / pageSize)), summary };
 }
 
 export async function getSale(ctx: Ctx, id: string) {
@@ -617,10 +731,17 @@ export async function getSale(ctx: Ctx, id: string) {
       client: true,
       seller: { select: { id: true, name: true } },
       createdBy: { select: { name: true } },
-      items: { include: { supplier: { select: { id: true, name: true } }, reservation: true }, orderBy: { sortOrder: "asc" } },
-      passengers: true,
-      receivables: { orderBy: [{ dueDate: "asc" }], include: { settlements: { where: { reversedAt: null } } } },
-      payables: { orderBy: [{ dueDate: "asc" }] },
+      items: {
+        include: { supplier: { select: { id: true, name: true } }, operator: { select: { id: true, name: true } }, reservation: true },
+        orderBy: { sortOrder: "asc" },
+      },
+      passengers: { include: { client: { select: { id: true, name: true } } } },
+      receivables: { orderBy: [{ dueDate: "asc" }], include: { settlements: { where: { reversedAt: null } }, client: { select: { id: true, name: true } } } },
+      payables: { orderBy: [{ dueDate: "asc" }], include: { invoice: { select: { id: true, number: true, status: true } } } },
+      trip: { select: { id: true, code: true, title: true } },
+      excursion: { select: { id: true, code: true, name: true } },
+      intermediary: { select: { id: true, name: true } },
+      attachments: { orderBy: { createdAt: "desc" } },
       commission: true,
       contracts: true,
     },
@@ -634,7 +755,14 @@ export async function getSale(ctx: Ctx, id: string) {
     grossProfitCents: showMargin ? sale.grossProfitCents : null,
     marginBps: showMargin ? sale.marginBps : null,
     agencyRevenueCents: showMargin ? sale.agencyRevenueCents : null,
-    items: sale.items.map((i) => ({ ...i, costCents: showMargin ? i.costCents : null, supplierCommissionCents: showMargin ? i.supplierCommissionCents : null })),
+    intermediaryCommissionCents: showMargin ? sale.intermediaryCommissionCents : null,
+    items: sale.items.map((i) => ({
+      ...i,
+      costCents: showMargin ? i.costCents : null,
+      supplierCommissionCents: showMargin ? i.supplierCommissionCents : null,
+      overCents: showMargin ? i.overCents : null,
+      cardFeeCents: showMargin ? i.cardFeeCents : null,
+    })),
     payables: canFinance ? sale.payables : [],
     plan: JSON.parse(sale.paymentPlanJson) as PlanItem[],
     financialStatus: saleFinancialStatus(sale.status, sale.receivables.filter((r) => r.origin === "VENDA"), today(ctx)),
@@ -651,6 +779,7 @@ export async function getSaleForEdit(ctx: Ctx, id: string) {
       items: { orderBy: { sortOrder: "asc" } },
       passengers: true,
       receivables: { where: { origin: "VENDA" }, select: { sourceKey: true, settledCents: true, status: true } },
+      trip: { select: { id: true, code: true, title: true } },
     },
   });
   if (!sale) throw new AppError("Venda não encontrada.", "NOT_FOUND");
@@ -662,7 +791,60 @@ export async function getSaleForEdit(ctx: Ctx, id: string) {
     const key = r.sourceKey?.split(":parcela:")[1];
     if (key && r.settledCents > 0) locked[key] = r.settledCents;
   }
-  return { ...sale, plan, locked };
+  const personIds = [...new Set([...plan.map((p) => p.payerClientId), ...sale.passengers.map((p) => p.clientId)].filter(Boolean))] as string[];
+  const people = await prisma.client.findMany({ where: { id: { in: personIds }, companyId: ctx.companyId }, select: { id: true, name: true, document: true } });
+  return { ...sale, plan, locked, people };
+}
+
+// ---------------------------------------------------------------------------
+// Reembolsos, multas e créditos ligados à venda (cancelamentos, remarcações)
+// ---------------------------------------------------------------------------
+
+/**
+ * Registra um reembolso ou multa vinculado à venda, gerando o lançamento financeiro correspondente:
+ * - Reembolso ao cliente → conta a pagar ao cliente (repasse: não entra no DRE)
+ * - Reembolso do fornecedor → conta a receber do fornecedor (repasse: não entra no DRE)
+ * - Multa paga ao fornecedor → conta a pagar (despesa)
+ * - Multa cobrada do cliente → conta a receber (receita)
+ * A chave do pedido garante que um duplo clique não gere dois lançamentos.
+ */
+export async function registerRefund(ctx: Ctx, saleId: string, raw: unknown) {
+  assertCan(ctx, "finance.manage");
+  const input = refundSchema.parse(raw);
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findFirst({ where: { id: saleId, companyId: ctx.companyId } });
+    if (!sale) throw new AppError("Venda não encontrada.", "NOT_FOUND");
+    if (sale.status === "ORCAMENTO") throw new AppError("Rascunhos não têm movimentação financeira para reembolsar.");
+    const needsSupplier = input.kind === "REEMBOLSO_FORNECEDOR" || input.kind === "MULTA_FORNECEDOR";
+    if (needsSupplier) {
+      if (!input.supplierId) throw new AppError("Selecione o fornecedor.", "VALIDATION", [{ field: "supplierId", message: "Selecione o fornecedor." }]);
+      const sup = await tx.supplier.findFirst({ where: { id: input.supplierId, companyId: ctx.companyId } });
+      if (!sup) throw new AppError("Fornecedor inválido.");
+    }
+    const sourceKey = `ajuste:${saleId}:${input.requestKey}`;
+    const dup =
+      (await tx.payable.findFirst({ where: { companyId: ctx.companyId, sourceKey } })) ??
+      (await tx.receivable.findFirst({ where: { companyId: ctx.companyId, sourceKey } }));
+    if (dup) return { id: dup.id, duplicated: true };
+    const description = `${sale.code} · ${REFUND_KINDS.label(input.kind)}${input.description ? ` · ${input.description}` : ""}`;
+    const common = { companyId: ctx.companyId, sourceKey, saleId, description, amountCents: input.amountCents, dueDate: input.dueDate, status: "PENDENTE", origin: "AJUSTE_VENDA", category: input.kind };
+    let id: string;
+    if (input.kind === "REEMBOLSO_CLIENTE" || input.kind === "MULTA_FORNECEDOR") {
+      id = (
+        await tx.payable.create({
+          data: { ...common, clientId: input.kind === "REEMBOLSO_CLIENTE" ? sale.clientId : null, supplierId: input.kind === "MULTA_FORNECEDOR" ? input.supplierId : null },
+        })
+      ).id;
+    } else {
+      id = (
+        await tx.receivable.create({
+          data: { ...common, clientId: input.kind === "MULTA_CLIENTE" ? sale.clientId : null, supplierId: input.kind === "REEMBOLSO_FORNECEDOR" ? input.supplierId : null },
+        })
+      ).id;
+    }
+    await audit(tx, ctx, "venda.ajuste_registrado", "Sale", saleId, { kind: input.kind, amountCents: input.amountCents, entryId: id });
+    return { id, duplicated: false };
+  });
 }
 
 export async function getSaleAudit(ctx: Ctx, id: string) {
