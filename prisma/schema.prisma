@@ -898,3 +898,14 @@ model PlatformAudit {
 
   @@index([createdAt])
 }
+
+/// Arquivos (comprovantes, vouchers, faturas, logos) quando o armazenamento é o próprio banco (ex.: Vercel).
+model StoredFile {
+  key       String   @id
+  companyId String
+  data      Bytes
+  sizeBytes Int
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+}

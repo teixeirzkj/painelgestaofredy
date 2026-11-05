@@ -164,7 +164,21 @@ export async function addCompanyAdmin(p: PlatformCtx, companyId: string, raw: un
   await platformAudit(p, "usuario.admin_criado", companyId, { email: d.email });
 }
 
+/**
+ * Primeiro acesso em produção: se ainda não existe nenhum usuário da plataforma e as variáveis
+ * PLATFORM_BOOTSTRAP_EMAIL / PLATFORM_BOOTSTRAP_PASSWORD estão definidas, o login com esses dados cria o usuário.
+ * Depois do primeiro acesso, remova as variáveis.
+ */
+async function bootstrapPlatformUser(email: string, pass: string) {
+  const be = process.env.PLATFORM_BOOTSTRAP_EMAIL?.trim().toLowerCase();
+  const bp = process.env.PLATFORM_BOOTSTRAP_PASSWORD;
+  if (!be || !bp || bp.length < 10 || email !== be || pass !== bp) return;
+  if ((await prisma.platformUser.count()) > 0) return;
+  await prisma.platformUser.create({ data: { name: "Administrador da plataforma", email: be, passwordHash: await bcrypt.hash(bp, 10) } });
+}
+
 export async function platformLogin(email: string, pass: string) {
+  await bootstrapPlatformUser(email.trim().toLowerCase(), pass);
   const u = await prisma.platformUser.findUnique({ where: { email: email.trim().toLowerCase() } });
   if (!u || !u.active || !(await bcrypt.compare(pass, u.passwordHash))) return null;
   await prisma.platformUser.update({ where: { id: u.id }, data: { lastLoginAt: new Date() } });

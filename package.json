@@ -12,7 +12,9 @@
     "db:reset": "node -e \"for (const f of ['prisma/dev.db','prisma/dev.db-journal']) require('fs').rmSync(f,{force:true})\" && prisma db push && tsx prisma/seed.ts",
     "test": "vitest run",
     "setup": "npm install && prisma db push && tsx prisma/seed.ts",
-    "platform:admin": "tsx scripts/create-platform-admin.ts"
+    "platform:admin": "tsx scripts/create-platform-admin.ts",
+    "postinstall": "prisma generate",
+    "vercel-build": "node scripts/use-postgres.mjs && prisma generate && prisma migrate deploy && next build"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
