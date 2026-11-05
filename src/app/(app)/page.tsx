@@ -22,7 +22,7 @@ import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { getDashboard } from "@/server/services/dashboard";
 import { sellerOptions } from "@/server/services/settings";
-import { Card, CardHeader, KpiCard, PageHeader, SectionTitle, Notice } from "@/components/ui";
+import { Card, CardHeader, KpiCard, PageHeader, ProgressBar, SectionTitle, Notice } from "@/components/ui";
 import { FilterForm, FilterSelect, PeriodSelect } from "@/components/filter-form";
 import { BarList, CashChart, MarginChart, SalesEvolutionChart } from "@/components/charts";
 import { ContractStatusBadge, SaleStatusBadge } from "@/components/status";
@@ -35,6 +35,11 @@ import { cn } from "@/lib/utils";
 export const metadata = { title: "Dashboard" };
 
 const delta = (cur: number, prev: number | null | undefined, inverse = false) => (prev ? { bps: ratioBps(cur - prev, Math.abs(prev)), label: "vs. período anterior", inverse } : { bps: null, label: "sem base anterior" });
+
+function greeting(timezone: string) {
+  const h = Number(new Intl.DateTimeFormat("pt-BR", { hour: "numeric", hour12: false, timeZone: timezone }).format(new Date()));
+  return h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite";
+}
 
 export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
   const ctx = await requirePageContext("dashboard.view");
@@ -54,8 +59,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   return (
     <>
       <PageHeader
-        title={`Olá, ${ctx.userName.split(" ")[0]}`}
-        description={`Central de gestão · ${formatDate(period.from)} a ${formatDate(period.to)}${d.financial ? "" : " · suas vendas"}`}
+        title={`${greeting(ctx.timezone)}, ${ctx.userName.split(" ")[0]}`}
+        description={`Visão de ${formatDate(period.from)} a ${formatDate(period.to)}${d.financial ? "" : " · suas vendas"}`}
       />
       {sp.negado && (
         <div className="mb-5">
@@ -82,33 +87,95 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         </FilterForm>
       </Card>
 
-      <section aria-label="Indicadores principais" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {(d.result || f) && (
+        <div className="mb-8 grid gap-5 xl:grid-cols-2">
+          {d.result && (
+            <Card className="bg-hero flex flex-col justify-between p-6">
+              <div>
+                <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">Resultado do período</p>
+                <p className={cn("mt-2 font-display text-[40px] font-bold leading-none tabular", d.result.resultCents < 0 ? "text-danger" : "text-success")}>{formatBRL(d.result.resultCents)}</p>
+                <p className="mt-2 text-sm text-muted">Receita da agência − custos, comissões e despesas · competência, mesma regra do DRE</p>
+              </div>
+              <div className="mt-8 grid grid-cols-3 gap-4 border-t border-line pt-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">Receita</p>
+                  <p className="mt-1 font-semibold tabular text-ink">{formatBRL(d.result.netRevenueCents)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">Custos e despesas</p>
+                  <p className="mt-1 font-semibold tabular text-ink">{formatBRL(d.result.costsCents)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">Margem</p>
+                  <p className="mt-1 font-semibold tabular text-ink">{formatPercentBps(d.result.marginBps)}</p>
+                </div>
+              </div>
+            </Card>
+          )}
+          {f && (
+            <Card className="bg-hero flex flex-col justify-between p-6">
+              <div className="flex items-center justify-between">
+                <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">Caixa do período</p>
+                <Link href="/financeiro/fluxo" className="text-xs font-medium text-brand-600 hover:underline">
+                  Fluxo de caixa →
+                </Link>
+              </div>
+              <div className="mt-5 grid grid-cols-2 gap-6">
+                <div>
+                  <p className="flex items-center gap-1.5 text-xs text-muted">
+                    <ArrowDownToLine className="h-3.5 w-3.5 text-success" /> Recebido
+                  </p>
+                  <p className="mt-1 font-display text-[26px] font-bold leading-tight tabular text-success">{formatBRL(f.receivedCents)}</p>
+                  <p className="text-xs text-muted">a receber {formatBRL(f.receivableCents)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="flex items-center justify-end gap-1.5 text-xs text-muted">
+                    <ArrowUpFromLine className="h-3.5 w-3.5 text-warning" /> Pago
+                  </p>
+                  <p className="mt-1 font-display text-[26px] font-bold leading-tight tabular text-warning">{formatBRL(f.paidCents)}</p>
+                  <p className="text-xs text-muted">a pagar {formatBRL(f.payableCents)}</p>
+                </div>
+              </div>
+              <div className="mt-6 border-t border-line pt-4">
+                <div className="mb-1.5 flex justify-between text-xs text-muted">
+                  <span>Recebido do previsto no período</span>
+                  <span className="font-medium text-ink">{f.receivedCents + f.receivableCents ? Math.round((f.receivedCents / (f.receivedCents + f.receivableCents)) * 100) : 0}%</span>
+                </div>
+                <ProgressBar value={f.receivedCents} max={f.receivedCents + f.receivableCents} tone="green" />
+                <p className="mt-3 text-xs text-muted">
+                  Saldo nas contas hoje: <span className="font-semibold text-ink">{formatBRL(f.balanceCents)}</span>
+                </p>
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      <SectionTitle>Vendas</SectionTitle>
+      <section aria-label="Vendas" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total vendido" value={formatBRL(k.grossCents)} icon={TrendingUp} delta={delta(k.grossCents, p.grossCents)} href="/vendas" />
-        {k.agencyRevenueCents !== null ? (
-          <KpiCard label="Receita da agência" value={formatBRL(k.agencyRevenueCents)} icon={Landmark} tone="violet" delta={delta(k.agencyRevenueCents, p.agencyRevenueCents)} />
-        ) : (
-          <KpiCard label="Ticket médio" value={formatBRL(k.ticketCents)} icon={Receipt} tone="violet" delta={delta(k.ticketCents, p.ticketCents)} />
-        )}
-        {k.grossProfitCents !== null ? (
-          <KpiCard label="Lucro bruto" value={formatBRL(k.grossProfitCents)} icon={PiggyBank} tone="green" delta={delta(k.grossProfitCents, p.grossProfitCents)} />
+        <KpiCard label="Quantidade de vendas" value={String(k.count)} icon={ShoppingBag} tone="violet" delta={delta(k.count, p.count)} />
+        <KpiCard label="Ticket médio" value={formatBRL(k.ticketCents)} icon={Receipt} tone="amber" delta={delta(k.ticketCents, p.ticketCents)} />
+        {k.marginBps !== null ? (
+          <KpiCard label="Margem das vendas" value={formatPercentBps(k.marginBps)} icon={Percent} tone="green" hint="lucro bruto ÷ total vendido" />
         ) : (
           <KpiCard label={d.financial ? "Comissões de vendedores" : "Suas comissões"} value={formatBRL(k.sellerCommissionCents)} icon={PiggyBank} tone="green" />
         )}
-        {k.marginBps !== null ? (
-          <KpiCard label="Margem" value={formatPercentBps(k.marginBps)} icon={Percent} tone="amber" hint="lucro bruto ÷ total vendido" />
-        ) : (
-          <KpiCard label="Vendas realizadas" value={String(k.count)} icon={ShoppingBag} tone="amber" delta={delta(k.count, p.count)} />
-        )}
-        {f && (
-          <>
-            <KpiCard label="Contas a receber" value={formatBRL(f.receivableCents)} icon={ArrowDownToLine} hint={`no período · recebido ${formatBRL(f.receivedCents)}`} href="/financeiro/receber?status=ABERTO" />
-            <KpiCard label="Contas a pagar" value={formatBRL(f.payableCents)} icon={ArrowUpFromLine} tone="red" hint={`no período · pago ${formatBRL(f.paidCents)}`} href="/financeiro/pagar?status=ABERTO" />
-            <KpiCard label="Saldo financeiro" value={formatBRL(f.balanceCents)} icon={Wallet} tone="slate" hint="soma das contas ativas hoje" href="/financeiro/contas" />
-            <KpiCard label="Vendas realizadas" value={String(k.count)} icon={ShoppingBag} tone="blue" delta={delta(k.count, p.count)} hint={`ticket ${formatBRL(k.ticketCents)}`} />
-          </>
-        )}
       </section>
 
+      {(k.agencyRevenueCents !== null || f) && (
+        <>
+          <SectionTitle>Receita & caixa</SectionTitle>
+          <section aria-label="Receita e caixa" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {k.agencyRevenueCents !== null && <KpiCard label="Receita da agência" value={formatBRL(k.agencyRevenueCents)} icon={Landmark} tone="violet" delta={delta(k.agencyRevenueCents, p.agencyRevenueCents)} />}
+            {k.grossProfitCents !== null && <KpiCard label="Lucro bruto" value={formatBRL(k.grossProfitCents)} icon={PiggyBank} tone="green" delta={delta(k.grossProfitCents, p.grossProfitCents)} />}
+            {f && <KpiCard label="Saldo financeiro" value={formatBRL(f.balanceCents)} icon={Wallet} tone="slate" hint="soma das contas ativas hoje" href="/financeiro/contas" />}
+            {f && <KpiCard label="Comissões pendentes" value={formatBRL(f.commissionsPendingCents)} icon={Receipt} tone="amber" hint="a pagar a vendedores" href="/financeiro/pagar?category=COMISSOES&status=ABERTO" />}
+          </section>
+        </>
+      )}
+
+      <SectionTitle>Atenção & evolução</SectionTitle>
       {f && f.overdueReceivableCents + f.overduePayableCents > 0 && (
         <Link href="/relatorios?r=contas-vencidas" className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-red-200 bg-red-50/60 px-4 py-2.5 text-sm text-red-900 transition-colors hover:bg-red-50">
           <AlertCircle className="h-4 w-4 text-danger" />
@@ -119,7 +186,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         </Link>
       )}
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-3">
+      <div className="mt-4 grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader title="Evolução das vendas" description="Total vendido por mês · últimos 12 meses" />
           <div className="p-4">

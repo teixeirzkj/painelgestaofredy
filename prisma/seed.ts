@@ -150,7 +150,7 @@ async function main() {
   let created = 0;
   for (let m = 11; m >= 0; m--) {
     const monthStart = addMonths(startOfMonth(TODAY), -m);
-    const count = m === 0 ? 4 : between(4, 8) + (m <= 2 ? 1 : 0);
+    const count = m === 0 ? 5 : between(10, 15) + (m <= 2 ? 2 : 0);
     for (let k = 0; k < count; k++) {
       const saleDate = addDays(monthStart, between(0, 27));
       if (saleDate > TODAY) continue;
@@ -178,7 +178,7 @@ async function main() {
         items.push({ productType: "SEGURO", description: "Seguro viagem", supplierId: suppliers["Seguro Viagem Protege (exemplo)"], commercialModel: "INTERMEDIACAO", priceCents: insurance, costCents: round(insurance * 0.7, 100), supplierCommissionCents: 0, supplierDueDate: addDays(saleDate, 10) });
       }
       const fees = rnd() > 0.7 ? 15000 : 0;
-      const discount = rnd() > 0.8 ? round(price * 0.03, 100) : 0;
+      const discount = !isCruise && rnd() > 0.8 ? round(price * 0.03, 100) : 0;
       const clientPays = items.filter((i) => i.commercialModel !== "COMISSAO").reduce((a, i) => a + i.priceCents, 0) + fees - discount;
       const method = pick(["PIX", "CARTAO_CREDITO", "BOLETO", "PIX", "TRANSFERENCIA"]);
       const n = clientPays <= 0 ? 0 : method === "PIX" && rnd() > 0.4 ? 1 : between(2, 6);
@@ -312,17 +312,17 @@ async function main() {
       confirm: true,
     });
   }
-  await addExcursionCost(cAdmin, exc.id, { description: "Fretamento ônibus leito", supplierId: suppliers["Transfer Express (exemplo)"], amountCents: 520000, dueDate: addDays(TODAY, 20) });
-  await addExcursionCost(cAdmin, exc.id, { description: "Hospedagem 3 noites (bloqueio)", supplierId: suppliers["Rede Hotéis Mar Azul (exemplo)"], amountCents: 900000, dueDate: addDays(TODAY, 15) });
-  await addExcursionCost(cAdmin, exc.id, { description: "Ingressos do parque", amountCents: 450000, dueDate: addDays(TODAY, 22) });
+  await addExcursionCost(cAdmin, exc.id, { description: "Fretamento ônibus leito", supplierId: suppliers["Transfer Express (exemplo)"], amountCents: 380000, dueDate: addDays(TODAY, 20) });
+  await addExcursionCost(cAdmin, exc.id, { description: "Hospedagem 3 noites (bloqueio)", supplierId: suppliers["Rede Hotéis Mar Azul (exemplo)"], amountCents: 450000, dueDate: addDays(TODAY, 15) });
+  await addExcursionCost(cAdmin, exc.id, { description: "Ingressos do parque", amountCents: 180000, dueDate: addDays(TODAY, 22) });
 
   // ------------------------------------------------------------- Despesas operacionais recorrentes
   const firstMonth = addMonths(startOfMonth(TODAY), -11);
   for (const e of [
-    { description: "Aluguel da loja", category: "ALUGUEL", amountCents: 320000, day: 10 },
-    { description: "Folha de pagamento", category: "SALARIOS", amountCents: 950000, day: 5 },
+    { description: "Aluguel da loja", category: "ALUGUEL", amountCents: 220000, day: 10 },
+    { description: "Folha de pagamento", category: "SALARIOS", amountCents: 650000, day: 5 },
     { description: "Sistemas e software", category: "SISTEMAS", amountCents: 45000, day: 15 },
-    { description: "Marketing digital", category: "MARKETING", amountCents: 120000, day: 20 },
+    { description: "Marketing digital", category: "MARKETING", amountCents: 90000, day: 20 },
     { description: "Contabilidade", category: "ADMINISTRATIVAS", amountCents: 60000, day: 12 },
   ]) {
     await createManualPayable(cFin, { description: e.description, category: e.category, amountCents: e.amountCents, firstDueDate: `${firstMonth.slice(0, 8)}${String(e.day).padStart(2, "0")}`, recurringMonths: 14, method: "TRANSFERENCIA", costCenterId: e.category === "MARKETING" ? ccMkt : ccLoja });

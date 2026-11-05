@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // ------------------------------ Botões ------------------------------
 type Variant = "primary" | "secondary" | "ghost" | "danger" | "outline";
 const variants: Record<Variant, string> = {
-  primary: "bg-brand-600 text-white shadow-sm shadow-brand-600/20 hover:bg-brand-700 active:bg-brand-800",
+  primary: "bg-brand-600 text-white shadow-sm shadow-brand-600/25 hover:bg-brand-700 active:bg-brand-800",
   secondary: "bg-brand-50 text-brand-700 hover:bg-brand-100",
   outline: "border border-line bg-white text-ink shadow-[0_1px_1px_rgba(16,42,86,0.04)] hover:border-line-strong hover:bg-slate-50",
   ghost: "text-slate-600 hover:bg-slate-100 hover:text-ink",
@@ -15,7 +15,7 @@ const variants: Record<Variant, string> = {
 };
 const sizes = { sm: "h-8 px-3 text-xs", md: "h-9 px-3.5 text-sm", lg: "h-11 px-5 text-sm", icon: "h-9 w-9" };
 const btnBase =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap select-none";
+  "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap select-none";
 
 export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: keyof typeof sizes; loading?: boolean };
 
@@ -48,7 +48,7 @@ export function LinkButton({
 
 // ------------------------------ Campos ------------------------------
 const fieldBase =
-  "w-full rounded-lg border border-line bg-white px-3 text-sm text-ink shadow-[0_1px_1px_rgba(16,42,86,0.03)] transition-colors placeholder:text-subtle hover:border-line-strong focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100 disabled:bg-slate-50 disabled:text-slate-500";
+  "w-full rounded-xl border border-line bg-white px-3 text-sm text-ink shadow-[0_1px_1px_rgba(16,42,86,0.03)] transition-colors placeholder:text-subtle hover:border-line-strong focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100 disabled:bg-slate-50 disabled:text-slate-500";
 
 export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...p }, ref) {
   return <input ref={ref} className={cn(fieldBase, "h-9", className)} {...p} />;
@@ -104,7 +104,7 @@ export function Field({
 // ------------------------------ Estrutura ------------------------------
 export function Card({ className, children, ...p }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("rounded-2xl border border-line bg-white shadow-[var(--shadow-card)]", className)} {...p}>
+    <div className={cn("rounded-[14px] border border-line bg-white shadow-[var(--shadow-card)]", className)} {...p}>
       {children}
     </div>
   );
@@ -127,12 +127,12 @@ export function CardHeader({
     <div className={cn("flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5", className)}>
       <div className="flex min-w-0 items-center gap-2.5">
         {Icon && (
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-brand-50 text-brand-600">
             <Icon className="h-4 w-4" />
           </span>
         )}
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-ink">{title}</h3>
+          <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
           {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
         </div>
       </div>
@@ -162,7 +162,7 @@ export function PageHeader({
             <ChevronLeft className="h-3.5 w-3.5" /> {back.label}
           </Link>
         )}
-        <h1 className="font-display text-[22px] font-semibold leading-tight text-ink sm:text-2xl">{title}</h1>
+        <h1 className="font-display text-[22px] font-bold leading-tight text-ink sm:text-[26px]">{title}</h1>
         {description && <div className="mt-1 text-sm text-muted">{description}</div>}
         {meta && <div className="mt-2 flex flex-wrap items-center gap-2">{meta}</div>}
       </div>
@@ -237,7 +237,7 @@ export function Th({ children, className, align = "left" }: { children?: React.R
   return (
     <th
       className={cn(
-        "whitespace-nowrap border-b border-line bg-slate-50/60 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-subtle",
+        "whitespace-nowrap border-b border-line bg-brand-25 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted",
         { left: "text-left", right: "text-right", center: "text-center" }[align],
         className,
       )}
@@ -282,7 +282,7 @@ export function Tabs({ items, active }: { items: { href: string; label: string; 
           href={i.href}
           className={cn(
             "flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-            active === i.key ? "bg-brand-600 text-white shadow-sm" : "text-muted hover:bg-slate-50 hover:text-ink",
+            active === i.key ? "bg-brand-500 text-white shadow-sm" : "text-muted hover:bg-brand-25 hover:text-ink",
           )}
         >
           {i.label}
@@ -323,7 +323,7 @@ export function KpiCard({
 }) {
   const toneCls = {
     blue: "bg-brand-50 text-brand-600",
-    green: "bg-green-50 text-green-600",
+    green: "bg-emerald-50 text-emerald-600",
     amber: "bg-amber-50 text-amber-600",
     red: "bg-red-50 text-red-600",
     violet: "bg-violet-50 text-violet-600",
@@ -332,26 +332,25 @@ export function KpiCard({
   const up = delta?.bps != null && delta.bps >= 0;
   const good = delta?.inverse ? !up : up;
   const body = (
-    <Card className={cn("h-full p-4 transition-shadow sm:p-5", href && "hover:shadow-[var(--shadow-pop)]")}>
+    <Card className={cn("h-full p-5 transition-shadow", href && "hover:shadow-[var(--shadow-pop)]")}>
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[13px] font-medium text-muted">{label}</p>
-        {Icon && (
-          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", toneCls)}>
-            <Icon className="h-4 w-4" />
+        {Icon ? (
+          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", toneCls)}>
+            <Icon className="h-[18px] w-[18px]" />
           </span>
+        ) : (
+          <span />
         )}
-      </div>
-      <p className="mt-2 truncate font-display text-[22px] font-semibold leading-tight tabular text-ink">{value}</p>
-      <div className="mt-2 flex min-h-5 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
         {delta && delta.bps != null && (
-          <span className={cn("inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 font-medium", good ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700")}>
+          <span className={cn("inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-medium", good ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700")}>
             {up ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
             {Math.abs(delta.bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%
           </span>
         )}
-        {delta?.label && <span>{delta.label}</span>}
-        {hint && <span>{hint}</span>}
       </div>
+      <p className="mt-4 truncate font-display text-[24px] font-bold leading-tight tabular text-ink">{value}</p>
+      <p className="mt-1 text-[13px] text-muted">{label}</p>
+      {(hint || delta?.label) && <p className="mt-1 text-xs text-subtle">{hint ?? delta?.label}</p>}
     </Card>
   );
   return href ? (
@@ -390,7 +389,7 @@ export function ProgressBar({ value, max, tone = "blue", className }: { value: n
 export function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="mb-3 mt-8 flex items-center justify-between first:mt-0">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-subtle">{children}</h2>
+      <h2 className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">{children}</h2>
       {action}
     </div>
   );

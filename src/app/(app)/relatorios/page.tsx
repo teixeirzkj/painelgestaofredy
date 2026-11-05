@@ -98,7 +98,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
               </thead>
               <tbody>
                 {result.rows.map((row, i) => (
-                  <tr key={i} className={cn(String(row[result.columns[0].key] ?? "").startsWith("(=)") && "bg-slate-50/80 font-semibold")}>
+                  <tr key={i} className={cn(String(row[result.columns[0].key] ?? "").startsWith("(=)") && "bg-emerald-50/70 font-semibold text-emerald-900")}>
                     {result.columns.map((c) => (
                       <Td
                         key={c.key}

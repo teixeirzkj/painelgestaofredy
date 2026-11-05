@@ -5,7 +5,7 @@ import { Fragment, useEffect, useRef, useState, useTransition } from "react";
 import { Search, Plus, Bell, ChevronRight, ShoppingBag, User, Map, Building2, Bus, Receipt, Loader2, CornerDownLeft, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBRL } from "@/lib/money";
-import { globalSearchAction } from "@/app/actions";
+import { globalSearchAction, logoutAction } from "@/app/actions";
 import type { SearchHit } from "@/server/services/search";
 import type { Alert } from "@/server/services/dashboard";
 
@@ -110,7 +110,7 @@ export function GlobalSearch() {
   };
 
   return (
-    <div ref={box} className="relative w-full max-w-md">
+    <div ref={box} className="relative w-full max-w-xs xl:max-w-sm">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" />
       <input
         ref={input}
@@ -136,12 +136,12 @@ export function GlobalSearch() {
             input.current?.blur();
           }
         }}
-        placeholder="Buscar vendas, clientes, viagens, localizadores…"
+        placeholder="Buscar…"
         aria-label="Busca global"
         role="combobox"
         aria-expanded={open && q.trim().length >= 2}
         aria-controls="global-search-results"
-        className="h-9 w-full rounded-lg border border-line bg-slate-50/80 pl-9 pr-14 text-sm placeholder:text-subtle transition-colors hover:border-line-strong focus:border-brand-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-brand-100"
+        className="h-9 w-full rounded-xl border border-line bg-white pl-9 pr-14 text-sm placeholder:text-subtle transition-colors hover:border-line-strong focus:border-brand-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-brand-100"
       />
       <span className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-line bg-white px-1.5 py-0.5 text-[10px] font-medium text-subtle sm:flex">
         {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Ctrl K"}
@@ -198,7 +198,7 @@ export function Notifications({ alerts }: { alerts: Alert[] }) {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-ink"
+        className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-white text-slate-500 transition-colors hover:border-line-strong hover:text-ink"
         aria-label={`Notificações${alerts.length ? ` (${alerts.length})` : ""}`}
       >
         <Bell className="h-[18px] w-[18px]" />
@@ -242,7 +242,7 @@ export function NewSaleButton() {
   return (
     <Link
       href="/vendas/nova"
-      className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg bg-brand-600 px-3.5 text-sm font-medium text-white shadow-sm shadow-brand-600/20 transition-colors hover:bg-brand-700"
+      className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-xl bg-brand-600 px-3.5 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700"
     >
       <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Nova venda</span>
     </Link>
@@ -257,5 +257,40 @@ export function DemoPill() {
     >
       <FlaskConical className="h-3 w-3" /> Demonstração
     </span>
+  );
+}
+
+export function UserMenu({ name, role, canSettings }: { name: string; role: string; canSettings: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+  const initial = name.trim().charAt(0).toUpperCase();
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen((v) => !v)} className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700 ring-2 ring-white transition-shadow hover:ring-brand-200" aria-label="Menu do usuário">
+        {initial}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-11 z-50 w-56 animate-pop-in rounded-xl border border-line bg-white p-1.5 shadow-[var(--shadow-pop)]">
+          <div className="px-3 py-2">
+            <p className="truncate text-sm font-semibold text-ink">{name}</p>
+            <p className="text-xs text-muted">{role}</p>
+          </div>
+          <div className="my-1 h-px bg-line" />
+          {canSettings && (
+            <Link href="/configuracoes" onClick={() => setOpen(false)} className="block rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-brand-25">
+              Configurações
+            </Link>
+          )}
+          <form action={logoutAction}>
+            <button className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-brand-25">Sair</button>
+          </form>
+        </div>
+      )}
+    </div>
   );
 }

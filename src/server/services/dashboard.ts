@@ -3,6 +3,7 @@ import { can, today, type Ctx } from "../context";
 import { addDays, addMonths, endOfMonth, monthKey, monthsBetween, previousPeriod, startOfMonth, type Period } from "@/lib/dates";
 import { ratioBps, sum } from "@/lib/money";
 import { saleScope } from "./sales";
+import { computeDre } from "./dre";
 
 export type DashboardFilters = Period & { sellerId?: string; productType?: string; status?: string };
 
@@ -94,6 +95,7 @@ export async function getDashboard(ctx: Ctx, f: DashboardFilters) {
 
   const alerts = await getAlerts(ctx, t, financial);
   const lists = await dashboardLists(ctx, t, financial);
+  const dre = financial && showMargin && can(ctx, "reports.financial") ? await computeDre(ctx.companyId, period) : null;
   const byProductCount = groupSum(
     periodSales.flatMap((s) => s.items),
     (i) => i.productType,
@@ -124,6 +126,7 @@ export async function getDashboard(ctx: Ctx, f: DashboardFilters) {
     finance,
     alerts,
     lists,
+    result: dre ? { resultCents: dre.result, netRevenueCents: dre.netRevenue, costsCents: dre.netRevenue - dre.result, marginBps: dre.marginBps } : null,
   };
 }
 

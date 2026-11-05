@@ -132,7 +132,7 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
                       </span>
                     </Td>
                     <Td className="max-w-48 truncate text-slate-600">{party ?? "—"}</Td>
-                    <Td>
+                    <Td className="whitespace-nowrap">
                       {e.sale ? (
                         <Link href={`/vendas/${e.sale.id}`} className="text-brand-700 hover:underline">
                           {e.sale.code}

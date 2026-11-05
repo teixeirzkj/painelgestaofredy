@@ -32,7 +32,7 @@ export function SalesEvolutionChart({ data }: { data: { month: string; grossCent
         <XAxis dataKey="month" tickFormatter={monthLabel} tick={AXIS} axisLine={false} tickLine={false} />
         <YAxis tickFormatter={(v) => formatBRLCompact(v)} tick={AXIS} axisLine={false} tickLine={false} width={64} />
         <Tooltip
-          cursor={{ fill: "rgba(23,92,211,0.06)" }}
+          cursor={{ fill: "rgba(139,107,181,0.08)" }}
           content={({ active, payload }) =>
             active && payload?.[0] ? (
               <TooltipBox
@@ -87,7 +87,7 @@ export function CashChart({ data }: { data: { month: string; receivedCents: numb
         <YAxis tickFormatter={(v) => formatBRLCompact(v)} tick={AXIS} axisLine={false} tickLine={false} width={64} />
         <Legend iconType="square" iconSize={10} wrapperStyle={{ fontSize: 12, color: "#475569" }} />
         <Tooltip
-          cursor={{ fill: "rgba(23,92,211,0.06)" }}
+          cursor={{ fill: "rgba(139,107,181,0.08)" }}
           content={({ active, payload }) =>
             active && payload?.[0] ? (
               <TooltipBox
