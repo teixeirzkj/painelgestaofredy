@@ -17,6 +17,7 @@ import { newKey } from "@/lib/utils";
 import { emitEvent } from "./automations";
 import { refreshCommissionStatus, saleScope } from "./sales";
 import { refreshInvoiceStatus } from "./invoices";
+import { assertPayableCategory, categoryMap } from "./admin";
 import { textContains, entryDelegate } from "./query";
 import { ATTACHMENT_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 
@@ -230,6 +231,7 @@ export async function createManualPayable(ctx: Ctx, raw: unknown) {
     if (d.supplierId && !(await tx.supplier.findFirst({ where: { id: d.supplierId, companyId: ctx.companyId } }))) throw new AppError("Fornecedor inválido.");
     if (d.saleId && !(await tx.sale.findFirst({ where: { id: d.saleId, companyId: ctx.companyId } }))) throw new AppError("Venda inválida.");
     await assertCostCenter(tx, ctx, d.costCenterId);
+    await assertPayableCategory(tx, ctx.companyId, d.category);
     const recurring = d.recurringMonths > 1;
     const parts = recurring ? Array(d.recurringMonths).fill(d.amountCents) : splitInstallments(d.amountCents, d.installments);
     const group = recurring ? newKey() : null;
@@ -265,8 +267,8 @@ export async function createManualPayable(ctx: Ctx, raw: unknown) {
 export async function updateEntry(ctx: Ctx, kind: EntryKind, id: string, raw: unknown) {
   assertCan(ctx, "finance.manage");
   const d = entryEditSchema.parse(raw);
-  const validCats = kind === "receivable" ? RECEIVABLE_CATEGORIES.values : PAYABLE_CATEGORIES.values;
-  if (!(validCats as readonly string[]).includes(d.category)) throw new AppError("Categoria inválida.");
+  if (kind === "receivable" && !(RECEIVABLE_CATEGORIES.values as readonly string[]).includes(d.category)) throw new AppError("Categoria inválida.");
+  if (kind === "payable") await assertPayableCategory(prisma as unknown as Tx, ctx.companyId, d.category);
   return prisma.$transaction(async (tx) => {
     const model = entryDelegate(tx, kind);
     const [e] = await model.findMany({ where: { id, companyId: ctx.companyId } });
@@ -717,13 +719,15 @@ export async function getAttachment(ctx: Ctx, id: string) {
 }
 
 export async function financeOptions(ctx: Ctx) {
-  const [accounts, clients, suppliers, costCenters] = await Promise.all([
+  const [accounts, clients, suppliers, costCenters, cats] = await Promise.all([
     prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.client.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" }, take: 500 }),
     prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.costCenter.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    categoryMap(ctx.companyId),
   ]);
-  return { accounts, clients, suppliers, costCenters };
+  const expenseCategories = [...cats.values()].filter((c) => c.active).map((c) => ({ value: c.code, label: c.name, group: c.group }));
+  return { accounts, clients, suppliers, costCenters, expenseCategories };
 }
 
 /** Indicadores do topo do módulo financeiro (posição atual, sem filtro de período). */

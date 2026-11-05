@@ -1,3 +1,4 @@
+import { auditActionLabel } from "@/lib/constants";
 import { requirePageContext } from "@/server/auth";
 import { getCompanySettings, listAudit } from "@/server/services/settings";
 import { listCommissionRules, listCostCenters } from "@/server/services/catalog";
@@ -10,6 +11,7 @@ import { formatPercentBps } from "@/lib/money";
 import { ROLES } from "@/lib/constants";
 import { int, str, withParams, type SearchParams } from "@/lib/params";
 import { CompanyForm, IntegrationsForm, PermissionToggle, UserButton } from "./settings-client";
+import { CompanyProfileForm, LogoUploader } from "./identity-client";
 
 export const metadata = { title: "Configurações" };
 
@@ -36,8 +38,33 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
       />
 
       {tab === "agencia" && (
+        <div className="mb-6 grid max-w-5xl gap-6">
+          <Card>
+            <CardHeader title="Identidade da agência" description="Logo exibida no topo do menu e dados usados em contratos e documentos." />
+            <div className="space-y-6 p-5">
+              <LogoUploader hasLogo={!!s.company.logoKey} />
+              <div className="border-t border-line pt-5">
+                <CompanyProfileForm
+                  initial={{
+                    name: s.company.name,
+                    tradeName: s.company.tradeName ?? "",
+                    document: s.company.document ?? "",
+                    contactEmail: s.company.contactEmail ?? "",
+                    contactPhone: s.company.contactPhone ?? "",
+                    address: s.company.address ?? "",
+                    responsibleName: s.company.responsibleName ?? "",
+                    responsibleDocument: s.company.responsibleDocument ?? "",
+                    responsibleRole: s.company.responsibleRole ?? "",
+                  }}
+                />
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+      {tab === "agencia" && (
         <Card className="max-w-3xl">
-          <CardHeader title="Dados da agência" description="Usados nos contratos, nos prazos de alertas e no cálculo de datas." />
+          <CardHeader title="Prazos, fuso horário e integrações" description="Usados nos prazos de alertas, no cálculo de datas e no envio de eventos." />
           <div className="p-5">
             <CompanyForm
               initial={{
@@ -168,7 +195,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
                   <Td className="whitespace-nowrap text-slate-600">{formatDateTime(a.createdAt, ctx.timezone)}</Td>
                   <Td>{a.user?.name ?? "Sistema"}</Td>
                   <Td>
-                    <code className="text-xs">{a.action}</code>
+                    <span className="text-sm">{auditActionLabel(a.action)}</span>
                   </Td>
                   <Td className="text-xs text-muted">
                     {a.entityType}

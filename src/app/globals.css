@@ -2,39 +2,39 @@
 
 /*
  * Design system Frédy Gestão
- * Paleta: roxo #8B6BB5 · marinho-roxo #2D1B69 · sidebar em gradiente #2D1B69→#1A0E2E · fundo #F6F4F9
- * texto #1B1528 / #6B6479 · bordas #EFEBF4 · verde #0F8A5F · verde-água (gráficos) #0E9384 · âmbar #D97706 · vermelho #DC2626
+ * Paleta Frédy: azul #155EEF · marinho #102A56 · sidebar em gradiente #13305F→#0A1834 · fundo #F5F7FB
+ * texto #172338 / #64748B · bordas #E9EEF5 · verde #0F8A5F · laranja (gráficos) #EB6834 · âmbar #D97706 · vermelho #DC2626
  */
 @theme {
-  --color-brand-25: #faf8fd;
-  --color-brand-50: #f4f0f9;
-  --color-brand-100: #ebe3f5;
-  --color-brand-200: #d9c9ea;
-  --color-brand-300: #b89ad4;
-  --color-brand-400: #a284c8;
-  --color-brand-500: #8b6bb5;
-  --color-brand-600: #7a5aa8;
-  --color-brand-700: #654790;
-  --color-brand-800: #4e3672;
-  --color-brand-900: #2d1b69;
-  --color-sidebar: #2d1b69;
-  --color-sidebar-end: #1a0e2e;
-  --color-sidebar-hover: #3a2780;
-  --color-surface: #f6f4f9;
-  --color-ink: #1b1528;
-  --color-muted: #6b6479;
-  --color-subtle: #9a93a8;
-  --color-line: #efebf4;
-  --color-line-strong: #ddd6e8;
+  --color-brand-25: #f5f8ff;
+  --color-brand-50: #eff4ff;
+  --color-brand-100: #d9e5ff;
+  --color-brand-200: #b6ccff;
+  --color-brand-300: #84adff;
+  --color-brand-400: #528bff;
+  --color-brand-500: #2970ff;
+  --color-brand-600: #155eef;
+  --color-brand-700: #0b4fd6;
+  --color-brand-800: #0b3fa8;
+  --color-brand-900: #102a56;
+  --color-sidebar: #13305f;
+  --color-sidebar-end: #0a1834;
+  --color-sidebar-hover: #1b3d75;
+  --color-surface: #f5f7fb;
+  --color-ink: #172338;
+  --color-muted: #64748b;
+  --color-subtle: #94a3b8;
+  --color-line: #e9eef5;
+  --color-line-strong: #d5dce8;
   --color-success: #0f8a5f;
   --color-danger: #dc2626;
   --color-warning: #d97706;
-  --color-series-1: #8b6bb5;
-  --color-series-2: #0e9384;
+  --color-series-1: #155eef;
+  --color-series-2: #eb6834;
   --font-sans: var(--font-geist), "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-geist), "Geist", ui-sans-serif, system-ui, sans-serif;
-  --shadow-card: 0 2px 12px rgba(45, 27, 105, 0.07);
-  --shadow-pop: 0 16px 40px -12px rgba(45, 27, 105, 0.28), 0 4px 10px -4px rgba(45, 27, 105, 0.1);
+  --shadow-card: 0 2px 12px rgba(16, 42, 86, 0.06);
+  --shadow-pop: 0 16px 40px -12px rgba(16, 42, 86, 0.28), 0 4px 10px -4px rgba(16, 42, 86, 0.1);
   --animate-fade-in: fade-in 0.18s ease-out;
   --animate-slide-in: slide-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-pop-in: pop-in 0.16s ease-out;
@@ -58,7 +58,7 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 .tabular { font-variant-numeric: tabular-nums; }
 .font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
 .bg-sidebar-gradient { background: linear-gradient(180deg, var(--color-sidebar) 0%, var(--color-sidebar-end) 100%); }
-.bg-hero { background: linear-gradient(135deg, #ffffff 0%, #f7f3fc 55%, #efe7f8 100%); }
+.bg-hero { background: linear-gradient(135deg, #ffffff 0%, #f5f8ff 55%, #e8f0ff 100%); }
 
 /* Barra de rolagem discreta */
 * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
@@ -73,7 +73,7 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
   top: 50%;
   transform: translateY(-50%);
   white-space: nowrap;
-  background: #2d1b69;
+  background: #102a56;
   color: #fff;
   font-size: 12px;
   font-weight: 500;

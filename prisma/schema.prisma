@@ -21,19 +21,32 @@ datasource db {
 }
 
 model Company {
-  id               String   @id @default(cuid())
-  name             String
-  document         String?
-  timezone         String   @default("America/Sao_Paulo")
-  isDemo           Boolean  @default(false)
-  commissionPayDay Int      @default(5) // dia do mês seguinte para pagamento de comissões
-  upcomingDueDays  Int      @default(5) // janela de "próximo do vencimento"
-  upcomingTripDays Int      @default(7) // janela de "viagem próxima"
-  webhookUrl       String? // destino genérico de eventos (opcional)
-  webhookSecret    String?
-  apiKeyHash       String? // chave para API de eventos (hash SHA-256)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  name                String
+  document            String?
+  timezone            String   @default("America/Sao_Paulo")
+  isDemo              Boolean  @default(false)
+  active              Boolean  @default(true) // conta suspensa pela plataforma = ninguém entra
+  suspendedReason     String?
+  logoKey             String? // logo da agência (armazenamento interno)
+  plan                String   @default("PADRAO")
+  maxUsers            Int      @default(5)
+  createdByPlatformId String?
+  commissionPayDay    Int      @default(5) // dia do mês seguinte para pagamento de comissões
+  upcomingDueDays     Int      @default(5) // janela de "próximo do vencimento"
+  upcomingTripDays    Int      @default(7) // janela de "viagem próxima"
+  webhookUrl          String? // destino genérico de eventos (opcional)
+  webhookSecret       String?
+  apiKeyHash          String? // chave para API de eventos (hash SHA-256)
+  tradeName           String? // nome fantasia
+  contactEmail        String?
+  contactPhone        String?
+  address             String?
+  responsibleName     String? // responsável legal (contratos)
+  responsibleDocument String?
+  responsibleRole     String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   users              User[]
   rolePermissions    RolePermission[]
@@ -61,20 +74,31 @@ model Company {
   supplierInvoices   SupplierInvoice[]
   costCenters        CostCenter[]
   commissionRules    CommissionRule[]
+  clientCredits      ClientCredit[]
+  editRequests       EditRequest[]
+  agencyTransfers    AgencyTransfer[]
+  goals              Goal[]
+  tasks              Task[]
+  expenseCategories  ExpenseCategory[]
+  cardFeeRates       CardFeeRate[]
+  accessLogs         AccessLog[]
 }
 
 model User {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   companyId         String
-  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   name              String
-  email             String   @unique
+  email             String    @unique
   passwordHash      String
   role              String // ADMIN | GESTOR | VENDEDOR | FINANCEIRO
-  active            Boolean  @default(true)
-  commissionRateBps Int      @default(0) // % padrão de comissão sobre a receita da agência (basis points)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  active            Boolean   @default(true)
+  commissionRateBps Int       @default(0) // % padrão de comissão sobre a receita da agência (basis points)
+  birthDate         String?
+  phone             String?
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   salesAsSeller Sale[]       @relation("SaleSeller")
   salesCreated  Sale[]       @relation("SaleCreatedBy")
@@ -134,6 +158,8 @@ model Client {
   receivables Receivable[]
   payables    Payable[]
   trips       Trip[]
+  credits     ClientCredit[]
+  tasks       Task[]
 
   @@unique([companyId, document])
   @@index([companyId, name])
@@ -160,21 +186,22 @@ model Passenger {
 }
 
 model Supplier {
-  id          String    @id @default(cuid())
-  companyId   String
-  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  name        String
-  document    String? // CNPJ
-  contactName String?
-  email       String?
-  phone       String?
-  category    String // OPERADORA | CIA_AEREA | HOTEL | CONSOLIDADORA | SEGURADORA | RECEPTIVO | TRANSPORTADORA | OUTROS
-  bankInfo    String?
-  pixKey      String?
-  notes       String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  archivedAt  DateTime?
+  id           String    @id @default(cuid())
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name         String
+  document     String? // CNPJ
+  contactName  String?
+  email        String?
+  phone        String?
+  category     String // OPERADORA | CIA_AEREA | HOTEL | CONSOLIDADORA | SEGURADORA | RECEPTIVO | TRANSPORTADORA | INTERMEDIARIO | OUTROS
+  billingCycle String    @default("AVULSO") // AVULSO | DECENDIAL | QUINZENAL | MENSAL (faturas consolidadas)
+  bankInfo     String?
+  pixKey       String?
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  archivedAt   DateTime?
 
   saleItems          SaleItem[]
   operatedItems      SaleItem[]        @relation("ItemOperator")
@@ -230,6 +257,8 @@ model Sale {
   paymentPlanJson             String     @default("[]") // parcelas planejadas [{key, dueDate, amountCents, method, description}]
   notes                       String?
   confirmedAt                 DateTime?
+  reviewedAt                  DateTime? // conferida pelo financeiro (edição passa a exigir solicitação aprovada)
+  reviewedById                String?
   cancelledAt                 DateTime?
   cancelReason                String?
   createdAt                   DateTime   @default(now())
@@ -243,7 +272,8 @@ model Sale {
   commission   Commission?
   contracts    Contract[]
 
-  attachments Attachment[]
+  attachments  Attachment[]
+  editRequests EditRequest[]
 
   @@unique([companyId, number])
   @@unique([companyId, code])
@@ -701,4 +731,170 @@ model CommissionRule {
   updatedAt     DateTime  @updatedAt
 
   @@index([companyId, supplierId])
+}
+
+/// Crédito do cliente (ex.: viagem cancelada com crédito para remarcação). Consumido por uma venda futura.
+model ClientCredit {
+  id           String    @id @default(cuid())
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  clientId     String
+  client       Client    @relation(fields: [clientId], references: [id])
+  amountCents  Int
+  reason       String
+  originSaleId String? // venda cancelada que gerou o crédito
+  usedSaleId   String? // venda que consumiu o crédito
+  supplierName String? // onde o crédito está (operadora/cia), quando aplicável
+  expiresAt    String? // validade (YYYY-MM-DD)
+  status       String // ABERTO | CONSUMIDO | CANCELADO
+  consumedAt   DateTime?
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([companyId, status])
+}
+
+/// Pedido de alteração de venda já conferida pelo financeiro.
+model EditRequest {
+  id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId        String
+  sale          Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  requestedById String
+  reason        String
+  status        String // PENDENTE | APROVADA | REJEITADA | UTILIZADA
+  reviewedById  String?
+  reviewNote    String?
+  reviewedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([companyId, status])
+}
+
+/// Repasse entre agências (ex.: comissão de venda que caiu na fatura de outra agência do grupo).
+/// Gera uma conta a pagar ou a receber, que segue o fluxo normal do financeiro.
+model AgencyTransfer {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  counterparty String // agência parceira
+  direction    String // A_REPASSAR | A_RECEBER
+  amountCents  Int
+  reference    String? // fatura / venda de referência
+  dueDate      String
+  notes        String?
+  entryId      String? // conta a pagar ou a receber gerada
+  createdAt    DateTime @default(now())
+
+  @@index([companyId, dueDate])
+}
+
+/// Metas mensais: da loja, por vendedor ou por fornecedor.
+model Goal {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  month            String // YYYY-MM
+  scope            String // LOJA | VENDEDOR | FORNECEDOR
+  targetId         String   @default("") // id do vendedor/fornecedor ("" para a loja)
+  metric           String   @default("FATURAMENTO") // FATURAMENTO | RECEITA
+  amountCents      Int
+  superAmountCents Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([companyId, month, scope, targetId])
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  type        String    @default("FOLLOW_UP") // FOLLOW_UP | DOCUMENTOS | PAGAMENTO | POS_VENDA | INTERNA | OUTRO
+  priority    String    @default("MEDIA") // URGENTE | ALTA | MEDIA | BAIXA
+  status      String    @default("PENDENTE") // PENDENTE | EM_ANDAMENTO | CONCLUIDA | CANCELADA
+  dueDate     String?
+  assigneeId  String?
+  createdById String?
+  clientId    String?
+  client      Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  saleId      String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([companyId, status])
+  @@index([companyId, dueDate])
+}
+
+/// Categorias de despesa editáveis, organizadas em grupos (aparecem no DRE).
+model ExpenseCategory {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  code      String // gravado em Payable.category
+  name      String
+  group     String
+  inDre     Boolean  @default(true)
+  active    Boolean  @default(true)
+  system    Boolean  @default(false) // usada pelas regras automáticas (não pode ser excluída)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, code])
+}
+
+/// Taxa da maquininha da agência por modalidade e faixa de parcelas.
+model CardFeeRate {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  modality         String // CREDITO | DEBITO
+  installmentsFrom Int      @default(1)
+  installmentsTo   Int      @default(1)
+  rateBps          Int
+  settlementDays   Int      @default(30)
+  brand            String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+}
+
+model AccessLog {
+  id        String   @id @default(cuid())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String?
+  email     String
+  type      String // LOGIN | LOGOUT | FALHA
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}
+
+/// Equipe da plataforma (Frédy): administra as contas das agências. Login separado em /plataforma.
+model PlatformUser {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model PlatformAudit {
+  id         String   @id @default(cuid())
+  platformId String
+  action     String
+  companyId  String?
+  dataJson   String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
 }

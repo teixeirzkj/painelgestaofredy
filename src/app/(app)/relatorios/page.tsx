@@ -1,3 +1,4 @@
+import { pagePeriod } from "@/server/month";
 import Link from "next/link";
 import { Download, BarChart3 } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
@@ -35,7 +36,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
     );
   const key = reports.some((r) => r.key === str(sp, "r")) ? str(sp, "r")! : reports[0].key;
   const def = reports.find((r) => r.key === key)!;
-  const period = resolvePeriod(str(sp, "periodo"), today(ctx), str(sp, "de"), str(sp, "ate"));
+  const period = await pagePeriod(ctx.timezone, str(sp, "periodo"), str(sp, "de"), str(sp, "ate"));
   const compare = str(sp, "comparar") === "1" && !!def.comparable;
   const result = await runReport(ctx, key, period, { compare });
   const csvHref = withParams(`/api/relatorios/${key}`, { periodo: period.preset, de: period.from, ate: period.to, comparar: compare ? "1" : undefined }, {});

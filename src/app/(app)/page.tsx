@@ -1,3 +1,4 @@
+import { pagePeriod } from "@/server/month";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -45,7 +46,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const ctx = await requirePageContext("dashboard.view");
   const sp = await searchParams;
   const t = today(ctx);
-  const period = resolvePeriod(str(sp, "periodo"), t, str(sp, "de"), str(sp, "ate"));
+  const period = await pagePeriod(ctx.timezone, str(sp, "periodo"), str(sp, "de"), str(sp, "ate"));
   const filters = { from: period.from, to: period.to, sellerId: str(sp, "vendedor"), productType: str(sp, "categoria"), status: str(sp, "status") };
   const [d, sellers] = await Promise.all([getDashboard(ctx, filters), can(ctx, "sales.view_all") ? sellerOptions(ctx) : Promise.resolve([])]);
   const k = d.kpis;

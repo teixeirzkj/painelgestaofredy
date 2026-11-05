@@ -13,6 +13,9 @@ import { createTrip } from "../src/server/services/trips";
 import { saveExcursion, addExcursionCost } from "../src/server/services/excursions";
 import { createInvoice, addPayablesToInvoice } from "../src/server/services/invoices";
 import { saveCostCenter, saveCommissionRule } from "../src/server/services/catalog";
+import { ensureExpenseCategories, saveCardFee } from "../src/server/services/admin";
+import { saveGoal, saveTask } from "../src/server/services/team";
+import { createCredit, setSaleReviewed, requestSaleEdit, createAgencyTransfer } from "../src/server/services/ops";
 import { createManualPayable, settleEntry, createTransfer } from "../src/server/services/finance";
 import { todayIn, addDays, addMonths, startOfMonth } from "../src/lib/dates";
 import { splitInstallments } from "../src/lib/money";
@@ -77,7 +80,9 @@ async function main() {
     data: { name: "Azul Viagens Guarapuava (DEMONSTRAÇÃO)", document: "11222333000181", timezone: TZ, isDemo: true },
   });
   const mkUser = (name: string, email: string, role: string, commissionRateBps = 0) =>
-    prisma.user.create({ data: { companyId: company.id, name, email, role, passwordHash: hash, commissionRateBps } });
+    prisma.user.create({
+      data: { companyId: company.id, name, email, role, passwordHash: hash, commissionRateBps, birthDate: `${between(1975, 2000)}-${TODAY.slice(5, 7)}-${String(between(1, 28)).padStart(2, "0")}`, phone: `(42) 9${between(8000, 9999)}-${between(1000, 9999)}` },
+    });
   const admin = await mkUser("Helena Admin", "admin@azulviagens.demo", "ADMIN");
   const gestora = await mkUser("Gestora Paula", "gestora@azulviagens.demo", "GESTOR", 1000);
   const ana = await mkUser("Ana Vendedora", "ana@azulviagens.demo", "VENDEDOR", 1000);
@@ -137,6 +142,12 @@ async function main() {
   }
 
   await seedTemplates(company.id);
+  await ensureExpenseCategories(prisma, company.id);
+  await prisma.supplier.update({ where: { id: suppliers["Consolidadora Rota Brasil (exemplo)"] }, data: { billingCycle: "DECENDIAL" } });
+  await saveCardFee(cAdmin, null, { modality: "DEBITO", installmentsFrom: 1, installmentsTo: 1, rateBps: 149, settlementDays: 1, active: true });
+  await saveCardFee(cAdmin, null, { modality: "CREDITO", installmentsFrom: 1, installmentsTo: 1, rateBps: 349, settlementDays: 30, active: true });
+  await saveCardFee(cAdmin, null, { modality: "CREDITO", installmentsFrom: 2, installmentsTo: 6, rateBps: 449, settlementDays: 30, active: true });
+  await saveCardFee(cAdmin, null, { modality: "CREDITO", installmentsFrom: 7, installmentsTo: 12, rateBps: 599, settlementDays: 30, active: true });
 
   // ------------------------------------------------------------- Cadastros auxiliares
   const ccLoja = await saveCostCenter(cAdmin, null, { name: "Loja física" });
@@ -366,6 +377,32 @@ async function main() {
     await registerRefund(cFin, cancelled.id, { kind: "MULTA_CLIENTE", amountCents: fine, dueDate: addDays(TODAY, -1), description: "Retenção de 20% conforme contrato (exemplo)", requestKey: "seed-multa" });
     await registerRefund(cFin, cancelled.id, { kind: "REEMBOLSO_CLIENTE", amountCents: paid - fine, dueDate: addDays(TODAY, 5), description: "Devolução do valor pago menos a multa (exemplo)", requestKey: "seed-reembolso" });
   }
+
+  // ------------------------------------------------------------- Metas, tarefas, créditos, conferência e repasses
+  const month = TODAY.slice(0, 7);
+  await saveGoal(cAdmin, { month, scope: "LOJA", metric: "FATURAMENTO", amountCents: 6000000 });
+  await saveGoal(cAdmin, { month, scope: "VENDEDOR", targetId: ana.id, metric: "FATURAMENTO", amountCents: 2500000 });
+  await saveGoal(cAdmin, { month, scope: "VENDEDOR", targetId: carlos.id, metric: "FATURAMENTO", amountCents: 2500000 });
+  await saveGoal(cAdmin, { month, scope: "FORNECEDOR", targetId: suppliers["Operadora Horizonte Turismo (exemplo)"], metric: "FATURAMENTO", amountCents: 3000000 });
+  const taskDefs = [
+    { title: "Enviar vouchers da viagem a Lisboa", type: "DOCUMENTOS", priority: "ALTA", dueDate: addDays(TODAY, 2), assigneeId: ana.id, clientId: lisboaClient.id },
+    { title: "Cobrar parcela em atraso", type: "PAGAMENTO", priority: "URGENTE", dueDate: addDays(TODAY, -1), assigneeId: fin.id },
+    { title: "Pós-venda: pedir avaliação aos clientes que voltaram", type: "POS_VENDA", priority: "MEDIA", dueDate: addDays(TODAY, 5), assigneeId: carlos.id },
+    { title: "Retornar orçamento de cruzeiro", type: "FOLLOW_UP", priority: "ALTA", dueDate: TODAY, assigneeId: ana.id, status: "EM_ANDAMENTO" },
+    { title: "Atualizar tabela de comissões das operadoras", type: "INTERNA", priority: "BAIXA", dueDate: addDays(TODAY, 12), assigneeId: gestora.id },
+  ];
+  for (const t of taskDefs) await saveTask(cAdmin, null, t);
+  await createCredit(cAdmin, { clientId: clients[5].id, amountCents: 185000, reason: "Remarcação: viagem adiada pelo cliente (exemplo)", supplierName: "Operadora Horizonte Turismo (exemplo)", expiresAt: addDays(TODAY, 20) });
+  await createCredit(cAdmin, { clientId: clients[8].id, amountCents: 92000, reason: "Crédito de bilhete aéreo não utilizado (exemplo)", supplierName: "Consolidadora Rota Brasil (exemplo)", expiresAt: addMonths(TODAY, 8) });
+  const lastMonthSales = await prisma.sale.findMany({ where: { companyId: company.id, status: "CONFIRMADA", saleDate: { gte: addMonths(startOfMonth(TODAY), -1), lt: startOfMonth(TODAY) } }, take: 12, orderBy: { saleDate: "asc" } });
+  for (const sl of lastMonthSales) await setSaleReviewed(cFin, sl.id, true);
+  const anaReviewed = lastMonthSales.find((x) => x.sellerId === ana.id);
+  if (anaReviewed) await requestSaleEdit(sellers[0], anaReviewed.id, "Cliente pediu para trocar a data do hotel; preciso ajustar o vencimento do fornecedor (exemplo).");
+  await createAgencyTransfer(cFin, { counterparty: "Azul Viagens Curitiba (exemplo)", direction: "A_RECEBER", amountCents: 64000, reference: "Comissão de venda na fatura da parceira", dueDate: addDays(TODAY, 8) });
+  await createAgencyTransfer(cFin, { counterparty: "Azul Viagens Ponta Grossa (exemplo)", direction: "A_REPASSAR", amountCents: 38000, reference: "Over de venda compartilhada", dueDate: addDays(TODAY, 15) });
+
+  // equipe da plataforma (painel de administração das contas)
+  await prisma.platformUser.upsert({ where: { email: "plataforma@fredy.demo" }, create: { name: "Equipe Frédy (demonstração)", email: "plataforma@fredy.demo", passwordHash: hash }, update: {} });
 
   await prisma.automationSetting.createMany({
     data: [

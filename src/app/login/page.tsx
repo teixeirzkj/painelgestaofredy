@@ -10,7 +10,7 @@ export default async function LoginPage() {
   const demo = process.env.NODE_ENV !== "production";
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
-      <div className="hidden flex-col justify-between bg-brand-900 p-12 text-white lg:flex">
+      <div className="bg-sidebar-gradient hidden flex-col justify-between p-12 text-white lg:flex">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-brand-600">
             <Plane className="h-5 w-5" />
@@ -18,7 +18,7 @@ export default async function LoginPage() {
           <span className="text-lg font-semibold">Frédy Gestão</span>
         </div>
         <div className="max-w-md">
-          <h1 className="text-3xl font-semibold leading-tight">Venda concluída, operação organizada.</h1>
+          <h1 className="font-display text-3xl font-bold leading-tight">Venda concluída, operação organizada.</h1>
           <p className="mt-4 text-blue-100/80">
             Lance a venda uma única vez e o sistema prepara contas a receber, pagamentos a fornecedores, comissões e contrato automaticamente.
           </p>
@@ -29,7 +29,7 @@ export default async function LoginPage() {
       </div>
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-sm">
-          <h2 className="text-2xl font-semibold text-ink">Entrar</h2>
+          <h2 className="font-display text-2xl font-bold text-ink">Entrar</h2>
           <p className="mt-1 text-sm text-muted">Acesse a gestão da sua agência.</p>
           <LoginForm />
           {demo && (

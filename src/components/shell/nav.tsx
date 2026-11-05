@@ -29,6 +29,28 @@ import {
   GitCompareArrows,
   FileText,
   SlidersHorizontal,
+  Gauge,
+  PlaneTakeoff,
+  Gift,
+  Cake,
+  FilePen,
+  ClipboardCheck,
+  CalendarDays,
+  TriangleAlert,
+  Target,
+  Trophy,
+  ListTodo,
+  CalendarRange,
+  MapPin,
+  Tags,
+  CreditCard,
+  ScrollText,
+  UserCircle,
+  Coins,
+  ArrowLeftRight,
+  Megaphone,
+  UsersRound,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logoutAction } from "@/app/actions";
@@ -53,11 +75,33 @@ const ICONS = {
   GitCompareArrows,
   FileText,
   SlidersHorizontal,
+  Gauge,
+  PlaneTakeoff,
+  Gift,
+  Cake,
+  FilePen,
+  ClipboardCheck,
+  CalendarDays,
+  TriangleAlert,
+  Target,
+  Trophy,
+  ListTodo,
+  CalendarRange,
+  MapPin,
+  Tags,
+  CreditCard,
+  ScrollText,
+  UserCircle,
+  Coins,
+  ArrowLeftRight,
+  Megaphone,
+  UsersRound,
+  Layers,
 };
 export type NavIcon = keyof typeof ICONS;
 export type NavItem = { href: string; label: string; icon: NavIcon };
 export type NavGroup = { label: string; icon: NavIcon; items: NavItem[] };
-type User = { name: string; role: string };
+type User = { name: string; role: string; logo?: string | null };
 
 function isActive(path: string, href: string) {
   const base = href.split("?")[0];
@@ -149,13 +193,18 @@ function Links({ groups, collapsed, onNavigate }: { groups: NavGroup[]; collapse
   );
 }
 
-function Brand({ company, role, collapsed }: { company: string; role: string; collapsed?: boolean }) {
+function Brand({ company, role, collapsed, logo }: { company: string; role: string; collapsed?: boolean; logo?: string | null }) {
   const name = company.replace(/\s*\(DEMONSTRAÇÃO\)\s*/i, "");
   return (
     <Link href="/" className={cn("flex items-center gap-3 border-b border-white/[0.08] py-5", collapsed ? "justify-center px-0" : "px-5")}>
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-lg shadow-black/30 ring-2 ring-white/15">
-        <Plane className="h-[18px] w-[18px] -rotate-12" />
-      </span>
+      {logo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logo} alt="" className="h-10 w-10 shrink-0 rounded-full bg-white object-contain p-1 ring-2 ring-white/15" />
+      ) : (
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-lg shadow-black/30 ring-2 ring-white/15">
+          <Plane className="h-[18px] w-[18px] -rotate-12" />
+        </span>
+      )}
       {!collapsed && (
         <span className="min-w-0">
           <span className="block text-[14px] font-semibold leading-tight text-white">{name}</span>
@@ -176,6 +225,10 @@ function Footer({ collapsed, onToggle }: { collapsed?: boolean; onToggle?: () =>
           {!collapsed && "Recolher menu"}
         </button>
       )}
+      <Link href="/minha-conta" className={item} data-tip={collapsed ? "Minha conta" : undefined}>
+        <UserCircle className="h-4 w-4" />
+        {!collapsed && "Minha conta"}
+      </Link>
       <form action={logoutAction}>
         <button className={item} data-tip={collapsed ? "Sair" : undefined} aria-label="Sair">
           <LogOut className="h-4 w-4" />
@@ -211,7 +264,7 @@ export function AppShell({
   return (
     <div className="min-h-screen" style={{ ["--sidebar-w" as string]: collapsed ? "72px" : "15rem" }}>
       <aside className={cn("no-print bg-sidebar-gradient fixed inset-y-0 left-0 z-30 hidden flex-col transition-[width] duration-200 lg:flex", collapsed ? "w-[72px]" : "w-60")}>
-        <Brand company={company} role={user.role} collapsed={collapsed} />
+        <Brand company={company} role={user.role} collapsed={collapsed} logo={user.logo} />
         <Links groups={groups} collapsed={collapsed} />
         <Footer collapsed={collapsed} onToggle={toggle} />
       </aside>
@@ -236,7 +289,7 @@ export function MobileNav({ groups, company, user }: { groups: NavGroup[]; compa
         <div className="fixed inset-0 z-50 animate-fade-in bg-black/50 lg:hidden" onClick={() => setOpen(false)}>
           <aside className="bg-sidebar-gradient flex h-full w-72 flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between pr-3">
-              <Brand company={company} role={user.role} />
+              <Brand company={company} role={user.role} logo={user.logo} />
               <button onClick={() => setOpen(false)} className="rounded-md p-2 text-white/80 hover:bg-white/10" aria-label="Fechar menu">
                 <X className="h-5 w-5" />
               </button>

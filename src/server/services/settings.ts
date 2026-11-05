@@ -81,6 +81,10 @@ export async function saveUser(ctx: Ctx, id: string | null, raw: unknown) {
   const d = userSchema.parse(raw);
   try {
     return await prisma.$transaction(async (tx) => {
+      const company = await tx.company.findUniqueOrThrow({ where: { id: ctx.companyId }, select: { maxUsers: true } });
+      const activeCount = await tx.user.count({ where: { companyId: ctx.companyId, active: true, ...(id ? { id: { not: id } } : {}) } });
+      if (d.active && activeCount >= company.maxUsers)
+        throw new AppError(`O plano da agência permite até ${company.maxUsers} usuários ativos. Fale com o suporte Frédy para ampliar.`);
       if (id) {
         const u = await tx.user.findFirst({ where: { id, companyId: ctx.companyId } });
         if (!u) throw new AppError("Usuário não encontrado.", "NOT_FOUND");

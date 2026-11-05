@@ -4,7 +4,7 @@ Módulo de gestão comercial e financeira para agências de turismo. O vendedor 
 
 > Primeira agência: Azul Viagens Guarapuava. A arquitetura é multiempresa (multi-tenant) desde o início.
 
-Módulos: dashboard, vendas, **viagens**, **excursões e grupos**, clientes (PF/PJ), financeiro (receber, pagar, **faturas de fornecedores**, fluxo de caixa, contas, conciliação), fornecedores com **regras de comissão/over**, contratos, relatórios (incluindo **DRE gerencial**), automações e configurações. A comparação com o Monde está em [MONDE_GAP_ANALYSIS.md](MONDE_GAP_ANALYSIS.md).
+Módulos: dashboards (geral e do vendedor), vendas, próximos embarques, créditos de clientes, aniversariantes, solicitações de edição, equipe (metas, ranking, tarefas, calendário), marketing (destinos e hotéis), financeiro completo (DRE, comissões, repasses entre agências, conciliação por decêndio, conferência de vendas, calendário financeiro, pendências), categorias de despesa editáveis, taxas de cartão, log de acessos, minha conta, painel da plataforma, e ainda vendas, **viagens**, **excursões e grupos**, clientes (PF/PJ), financeiro (receber, pagar, **faturas de fornecedores**, fluxo de caixa, contas, conciliação), fornecedores com **regras de comissão/over**, contratos, relatórios (incluindo **DRE gerencial**), automações e configurações. A comparação com o Monde está em [MONDE_GAP_ANALYSIS.md](MONDE_GAP_ANALYSIS.md).
 
 ## Como executar
 
@@ -35,6 +35,14 @@ Outros comandos:
 | ana@azulviagens.demo / carlos@azulviagens.demo | Vendedor |
 | financeiro@azulviagens.demo | Financeiro |
 | admin@agenciab.demo | Administrador de outra agência (para verificar isolamento) |
+
+**Painel da plataforma** (equipe Frédy): `/plataforma/login` com `plataforma@fredy.demo` / `demo1234`. Ali se criam as contas das agências (com login e senha provisória do administrador), suspende-se/reativa-se uma agência, ajusta-se plano/limite de usuários e redefinem-se senhas. Em produção, crie o primeiro acesso com:
+
+```bash
+npm run platform:admin -- "Seu Nome" voce@empresa.com "senha-com-10-ou-mais"
+```
+
+Cada agência personaliza a própria marca em Configurações → Agência (logo exibida no menu, dados da empresa e do responsável legal).
 
 Todos os dados da demonstração são fictícios e as empresas estão marcadas como demonstração (selo "Demonstração" no topo). Além das vendas, a demonstração inclui: a viagem **Férias em Lisboa** (aéreo com RAV/DU e taxa CC, hotel via operadora com over, intermediário e parcelas pagas por uma empresa), a excursão **Beto Carrero World** com rooming list e custos, uma **fatura de operadora com divergência de R$ 35** para conferir, e um reembolso com multa em venda cancelada. A venda com localizador **EXEMPLO8000** (cliente "Mariana Exemplo da Silva"; busque por EXEMPLO8000) é o cenário obrigatório do briefing: pacote de R$ 8.000, custo R$ 6.500, comissão R$ 200, 4 × R$ 2.000.
 

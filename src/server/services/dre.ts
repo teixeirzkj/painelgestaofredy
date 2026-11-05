@@ -13,6 +13,7 @@ import { prisma } from "../db";
 import type { Period } from "@/lib/dates";
 import { sum, ratioBps } from "@/lib/money";
 import { PASS_THROUGH_CATEGORIES, PAYABLE_CATEGORIES } from "@/lib/constants";
+import { categoryMap } from "./admin";
 
 export type DreLine = { key: string; label: string; amountCents: number; level: 0 | 1 | 2; kind: "total" | "plus" | "minus" | "info" };
 
@@ -48,12 +49,16 @@ export async function computeDre(companyId: string, p: Period) {
   const interComm = sum(sales.map((s) => s.intermediaryCommissionCents));
   const salesProfit = netRevenue - cogs - sellerComm - interComm;
 
-  const expenses = payables.filter((x) => !SALE_DRIVEN_PAYABLES.has(x.origin) && !PASS_THROUGH_CATEGORIES.has(x.category));
+  const cats = await categoryMap(companyId);
+  const expenses = payables.filter((x) => !SALE_DRIVEN_PAYABLES.has(x.origin) && !PASS_THROUGH_CATEGORIES.has(x.category) && cats.get(x.category)?.inDre !== false);
   const excursionCosts = sum(expenses.filter((x) => x.category === "OPERACAO_PROPRIA").map((x) => x.amountCents));
   const fines = sum(expenses.filter((x) => x.category === "MULTA_FORNECEDOR").map((x) => x.amountCents));
   const opex = expenses.filter((x) => x.category !== "OPERACAO_PROPRIA" && x.category !== "MULTA_FORNECEDOR");
   const opexByCat = new Map<string, number>();
-  for (const x of opex) opexByCat.set(x.category, (opexByCat.get(x.category) ?? 0) + x.amountCents);
+  for (const x of opex) {
+    const label = cats.get(x.category)?.group ?? PAYABLE_CATEGORIES.label(x.category);
+    opexByCat.set(label, (opexByCat.get(label) ?? 0) + x.amountCents);
+  }
   const opexTotal = sum([...opexByCat.values()]);
 
   const otherRec = receivables.filter((r) => !SALE_DRIVEN_RECEIVABLES.has(r.origin) && !PASS_THROUGH_CATEGORIES.has(r.category));
@@ -81,7 +86,7 @@ export async function computeDre(companyId: string, p: Period) {
     { key: "excursoes", label: "Custos de excursões (operação própria)", amountCents: excursionCosts, level: 1, kind: "minus" },
     ...[...opexByCat.entries()]
       .sort((a, b) => b[1] - a[1])
-      .map(([cat, v]) => ({ key: `desp_${cat}`, label: PAYABLE_CATEGORIES.label(cat), amountCents: v, level: 2 as const, kind: "minus" as const })),
+      .map(([group, v]) => ({ key: `desp_${group}`, label: group, amountCents: v, level: 2 as const, kind: "minus" as const })),
     { key: "despesas", label: "Despesas operacionais", amountCents: opexTotal, level: 1, kind: "minus" },
     { key: "multas_fornecedor", label: "Multas pagas a fornecedores", amountCents: fines, level: 1, kind: "minus" },
     { key: "multas_cliente", label: "Multas cobradas de clientes", amountCents: clientFines, level: 1, kind: "plus" },

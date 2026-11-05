@@ -30,6 +30,28 @@ const LABELS: Record<string, string> = {
   relatorios: "Relatórios",
   automacoes: "Automações",
   configuracoes: "Configurações",
+  vendedor: "Painel do vendedor",
+  embarques: "Próximos embarques",
+  creditos: "Créditos",
+  aniversariantes: "Aniversariantes",
+  solicitacoes: "Solicitações de edição",
+  dre: "DRE",
+  comissoes: "Comissões",
+  repasses: "Repasses",
+  decendios: "Conciliação por decêndio",
+  conferencia: "Conferência de vendas",
+  calendario: "Calendário",
+  pendencias: "Pendências",
+  equipe: "Equipe",
+  metas: "Metas",
+  ranking: "Ranking",
+  tarefas: "Tarefas",
+  marketing: "Marketing",
+  destinos: "Destinos e hotéis",
+  categorias: "Categorias de despesa",
+  "taxas-cartao": "Taxas de cartão",
+  acessos: "Log de acessos",
+  "minha-conta": "Minha conta",
 };
 
 export function Breadcrumbs() {
@@ -37,7 +59,7 @@ export function Breadcrumbs() {
   const parts = path.split("/").filter(Boolean);
   const crumbs = [{ href: "/", label: "Início" }, ...parts.map((p, i) => ({ href: "/" + parts.slice(0, i + 1).join("/"), label: LABELS[p] ?? "Detalhe" }))];
   return (
-    <nav aria-label="Trilha de navegação" className="hidden min-w-0 items-center gap-1 text-[13px] xl:flex">
+    <nav aria-label="Trilha de navegação" className="hidden min-w-0 items-center gap-1 text-[13px] 2xl:flex">
       {crumbs.map((c, i) => (
         <Fragment key={c.href}>
           {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-300" />}

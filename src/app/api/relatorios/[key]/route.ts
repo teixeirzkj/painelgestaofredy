@@ -1,3 +1,4 @@
+import { pagePeriod } from "@/server/month";
 import { NextResponse } from "next/server";
 import { getContext } from "@/server/auth";
 import { today } from "@/server/context";
@@ -12,7 +13,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ key: str
   if (!ctx) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
   const { key } = await params;
   const url = new URL(req.url);
-  const p = resolvePeriod(url.searchParams.get("periodo") ?? undefined, today(ctx), url.searchParams.get("de") ?? undefined, url.searchParams.get("ate") ?? undefined);
+  const p = await pagePeriod(ctx.timezone, url.searchParams.get("periodo") ?? undefined, url.searchParams.get("de") ?? undefined, url.searchParams.get("ate") ?? undefined);
   try {
     const r = await runReport(ctx, key, p, { compare: url.searchParams.get("comparar") === "1" });
     const fmt = (v: unknown, type: string) => {

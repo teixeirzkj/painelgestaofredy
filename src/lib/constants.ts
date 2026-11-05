@@ -77,6 +77,7 @@ export const PAYABLE_CATEGORIES = labels({
   OPERACAO_PROPRIA: "Custos de excursões",
   REEMBOLSO_CLIENTE: "Reembolsos a clientes",
   MULTA_FORNECEDOR: "Multas de fornecedores",
+  TAXA_CARTAO: "Taxas de cartão (maquininha)",
   ALUGUEL: "Aluguel",
   MARKETING: "Marketing",
   SISTEMAS: "Sistemas",
@@ -187,3 +188,111 @@ export const REFUND_KINDS = labels({
   MULTA_FORNECEDOR: "Multa paga ao fornecedor",
   MULTA_CLIENTE: "Multa cobrada do cliente",
 });
+
+export const TASK_STATUS = labels({ PENDENTE: "Pendente", EM_ANDAMENTO: "Em andamento", CONCLUIDA: "Concluída", CANCELADA: "Cancelada" });
+export const TASK_PRIORITY = labels({ URGENTE: "Urgente", ALTA: "Alta", MEDIA: "Média", BAIXA: "Baixa" });
+export const TASK_TYPES = labels({
+  FOLLOW_UP: "Follow-up com cliente",
+  DOCUMENTOS: "Documentos de viagem",
+  PAGAMENTO: "Cobrança / pagamento",
+  POS_VENDA: "Pós-venda",
+  INTERNA: "Tarefa interna",
+  OUTRO: "Outro",
+});
+export const CREDIT_STATUS = labels({ ABERTO: "Em aberto", CONSUMIDO: "Consumido", CANCELADO: "Cancelado" });
+export const EDIT_REQUEST_STATUS = labels({ PENDENTE: "Pendente", APROVADA: "Aprovada", REJEITADA: "Rejeitada", UTILIZADA: "Utilizada" });
+export const BILLING_CYCLES = labels({ AVULSO: "Avulso (por venda)", DECENDIAL: "Decendial (fatura a cada 10 dias)", QUINZENAL: "Quinzenal", MENSAL: "Mensal" });
+export const CARD_MODALITIES = labels({ CREDITO: "Crédito", DEBITO: "Débito" });
+export const TRANSFER_DIRECTIONS = labels({ A_REPASSAR: "A repassar (pagar)", A_RECEBER: "A receber" });
+export const GOAL_METRICS = labels({ FATURAMENTO: "Faturamento", RECEITA: "Receita da agência" });
+
+/** Catálogo padrão de categorias de despesa, por grupo (editável em Configurações). system = usada pelas regras automáticas. */
+export const DEFAULT_EXPENSE_CATEGORIES: { group: string; items: { code: string; name: string; system?: boolean; inDre?: boolean }[] }[] = [
+  { group: "Ocupação", items: [{ code: "ALUGUEL", name: "Aluguel" }, { code: "CONDOMINIO", name: "Condomínio" }, { code: "IPTU", name: "IPTU" }, { code: "ENERGIA", name: "Energia elétrica" }, { code: "AGUA", name: "Água" }, { code: "INTERNET", name: "Internet e telefone" }] },
+  {
+    group: "Pessoal",
+    items: [
+      { code: "SALARIOS", name: "Salários" },
+      { code: "COMISSOES", name: "Comissões de vendedores e parceiros", system: true },
+      { code: "VALE_REFEICAO", name: "Vale alimentação / refeição" },
+      { code: "VALE_TRANSPORTE", name: "Vale transporte" },
+      { code: "PLANO_SAUDE", name: "Plano de saúde" },
+      { code: "ENCARGOS", name: "FGTS / INSS / encargos" },
+      { code: "FERIAS_13", name: "Férias / 13º salário" },
+      { code: "RESCISOES", name: "Rescisões" },
+    ],
+  },
+  { group: "Marketing", items: [{ code: "MARKETING", name: "Marketing digital" }, { code: "TRAFEGO_PAGO", name: "Tráfego pago" }, { code: "AGENCIA_MARKETING", name: "Agência de marketing" }, { code: "DISPARO_WHATSAPP", name: "Disparo de WhatsApp" }, { code: "BRINDES", name: "Brindes e presentes" }, { code: "MATERIAL_GRAFICO", name: "Material gráfico" }, { code: "EVENTOS", name: "Eventos e feiras" }] },
+  {
+    group: "Operacional",
+    items: [
+      { code: "ADMINISTRATIVAS", name: "Despesas administrativas" },
+      { code: "SISTEMAS", name: "Sistemas e software" },
+      { code: "CONTABILIDADE", name: "Contabilidade" },
+      { code: "MATERIAL_ESCRITORIO", name: "Material de escritório" },
+      { code: "MANUTENCAO", name: "Manutenção e reparos" },
+      { code: "SEGURO_EMPRESARIAL", name: "Seguro empresarial" },
+      { code: "TARIFAS_BANCARIAS", name: "Despesas bancárias / tarifas" },
+      { code: "CORREIOS", name: "Frete e correios" },
+    ],
+  },
+  { group: "Impostos e tributos", items: [{ code: "IMPOSTOS", name: "Impostos e tributos" }, { code: "DAS", name: "DAS / Simples Nacional" }, { code: "ISS", name: "ISS" }, { code: "OUTROS_IMPOSTOS", name: "Outros impostos" }] },
+  {
+    group: "Custos da operação",
+    items: [
+      { code: "FORNECEDORES", name: "Fornecedores turísticos", system: true },
+      { code: "OPERACAO_PROPRIA", name: "Custos de excursões", system: true },
+      { code: "MULTA_FORNECEDOR", name: "Multas de fornecedores", system: true },
+    ],
+  },
+  {
+    group: "Custos extras",
+    items: [
+      { code: "TREINAMENTO", name: "Treinamentos" },
+      { code: "VIAGENS_CORPORATIVAS", name: "Viagens corporativas" },
+      { code: "MULTAS_JUROS", name: "Multas e juros" },
+      { code: "JURIDICO", name: "Despesas jurídicas" },
+      { code: "PREJUIZO_OPERACIONAL", name: "Prejuízo operacional / erros" },
+      { code: "REEMBOLSO_CLIENTE", name: "Reembolsos a clientes", system: true, inDre: false },
+    ],
+  },
+  { group: "Deduções", items: [{ code: "TAXA_CARTAO", name: "Taxas de cartão (maquininha)", system: true }, { code: "DEVOLUCOES", name: "Devoluções e estornos" }] },
+  { group: "Outros", items: [{ code: "OUTROS", name: "Outras despesas" }] },
+];
+
+/** Feriados nacionais (fixos e móveis) — usados nos calendários. */
+export function nationalHolidays(year: number): Record<string, string> {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const fixed: Record<string, string> = {
+    [`${year}-01-01`]: "Confraternização Universal",
+    [`${year}-04-21`]: "Tiradentes",
+    [`${year}-05-01`]: "Dia do Trabalho",
+    [`${year}-09-07`]: "Independência",
+    [`${year}-10-12`]: "Nossa Senhora Aparecida",
+    [`${year}-11-02`]: "Finados",
+    [`${year}-11-15`]: "Proclamação da República",
+    [`${year}-11-20`]: "Consciência Negra",
+    [`${year}-12-25`]: "Natal",
+  };
+  // Páscoa (algoritmo de Meeus/Butcher)
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  const easter = Date.UTC(year, month - 1, day);
+  const rel = (days: number) => { const dt = new Date(easter + days * 86400000); return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`; };
+  return { ...fixed, [rel(-47)]: "Carnaval", [rel(-2)]: "Sexta-feira Santa", [rel(60)]: "Corpus Christi" };
+}
+
+/** Texto legível para as ações registradas na auditoria ("venda.alterada" → "Venda alterada"). */
+const AUDIT_ENTITIES: Record<string, string> = {
+  venda: "Venda", receber: "Conta a receber", pagar: "Conta a pagar", baixa: "Baixa", cliente: "Cliente", fornecedor: "Fornecedor",
+  contrato: "Contrato", modelo: "Modelo de contrato", usuario: "Usuário", agencia: "Agência", conta: "Conta", fatura: "Fatura de fornecedor",
+  viagem: "Viagem", excursao: "Excursão", credito: "Crédito", meta: "Meta", tarefa: "Tarefa", repasse: "Repasse", categoria: "Categoria",
+  taxa_cartao: "Taxa de cartão", centro_custo: "Centro de custo", regra_comissao: "Regra de comissão", anexo: "Anexo", api: "API",
+  orcamento: "Orçamento", transferencia: "Transferência", automacao: "Automação", permissao: "Permissão", conciliacao: "Conciliação",
+};
+export function auditActionLabel(action: string): string {
+  const [entity, ...rest] = action.split(".");
+  const what = rest.join(" ").replace(/_/g, " ");
+  return `${AUDIT_ENTITIES[entity] ?? entity.replace(/_/g, " ")}${what ? ` · ${what}` : ""}`;
+}

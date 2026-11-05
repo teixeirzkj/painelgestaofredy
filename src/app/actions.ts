@@ -8,7 +8,11 @@ import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/server/db";
-import { createSession, destroySession, requireContext } from "@/server/auth";
+import { headers } from "next/headers";
+import { createSession, destroySession, getContext, requireContext } from "@/server/auth";
+import * as admin from "@/server/services/admin";
+import * as team from "@/server/services/team";
+import * as ops from "@/server/services/ops";
 import { toResult, AppError, type ActionResult } from "@/server/errors";
 import * as sales from "@/server/services/sales";
 import * as finance from "@/server/services/finance";
@@ -41,19 +45,32 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
   const password = String(form.get("password") ?? "");
   const a = attempts.get(email);
   if (a && a.until > Date.now()) return { error: "Muitas tentativas. Aguarde alguns minutos." };
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email }, include: { company: { select: { active: true } } } });
   const ok = user && user.active && (await bcrypt.compare(password, user.passwordHash));
+  const hdr = await headers();
+  const meta = { ip: hdr.get("x-forwarded-for")?.split(",")[0] ?? null, userAgent: hdr.get("user-agent") };
+  if (ok && !user.company.active) {
+    await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "FALHA", ...meta });
+    return { error: "A conta desta agência está suspensa. Fale com o suporte Frédy." };
+  }
   if (!ok) {
+    await admin.logAccess({ companyId: user?.companyId ?? null, userId: user?.id ?? null, email, type: "FALHA", ...meta });
     const n = (a?.n ?? 0) + 1;
     attempts.set(email, { n, until: n >= 5 ? Date.now() + 5 * 60_000 : 0 });
     return { error: "E-mail ou senha inválidos." };
   }
   attempts.delete(email);
   await createSession(user.id);
+  await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
   redirect("/");
 }
 
 export async function logoutAction() {
+  const ctx = await getContext();
+  if (ctx) {
+    const hdr = await headers();
+    await admin.logAccess({ companyId: ctx.companyId, userId: ctx.userId, email: ctx.userName, type: "LOGOUT", ip: hdr.get("x-forwarded-for")?.split(",")[0] ?? null, userAgent: hdr.get("user-agent") });
+  }
   await destroySession();
   redirect("/login");
 }
@@ -151,3 +168,25 @@ export const cancelInvoiceAction = async (id: string) => act((ctx) => invoices.c
 export const saveCostCenterAction = async (id: string | null, input: unknown) => act((ctx) => catalog.saveCostCenter(ctx, id, input), "Centro de custo salvo.");
 export const saveCommissionRuleAction = async (id: string | null, input: unknown) => act((ctx) => catalog.saveCommissionRule(ctx, id, input), "Regra salva.");
 export const deleteCommissionRuleAction = async (id: string) => act((ctx) => catalog.deleteCommissionRule(ctx, id), "Regra excluída.");
+
+// ------------------------------ Equipe ------------------------------
+export const saveGoalAction = async (input: unknown) => act((ctx) => team.saveGoal(ctx, input), "Meta salva.");
+export const saveTaskAction = async (id: string | null, input: unknown) => act((ctx) => team.saveTask(ctx, id, input), "Tarefa salva.");
+export const setTaskStatusAction = async (id: string, status: string) => act((ctx) => team.setTaskStatus(ctx, id, status));
+
+// ------------------------------ Créditos, conferência e solicitações ------------------------------
+export const createCreditAction = async (input: unknown) => act((ctx) => ops.createCredit(ctx, input), "Crédito lançado.");
+export const consumeCreditAction = async (id: string, saleId: string) => act((ctx) => ops.consumeCredit(ctx, id, saleId), "Crédito utilizado na venda.");
+export const cancelCreditAction = async (id: string) => act((ctx) => ops.cancelCredit(ctx, id), "Crédito cancelado.");
+export const creditSalesOptionsAction = async (clientId: string) => toResult(async () => ops.creditSalesOptions(await requireContext(), clientId));
+export const setSaleReviewedAction = async (saleId: string, reviewed: boolean) => act((ctx) => ops.setSaleReviewed(ctx, saleId, reviewed), reviewed ? "Venda conferida." : "Conferência desfeita.");
+export const requestSaleEditAction = async (saleId: string, reason: string) => act((ctx) => ops.requestSaleEdit(ctx, saleId, reason), "Solicitação enviada ao financeiro.");
+export const reviewEditRequestAction = async (id: string, approve: boolean, note?: string) => act((ctx) => ops.reviewEditRequest(ctx, id, approve, note), approve ? "Edição liberada." : "Solicitação rejeitada.");
+export const createAgencyTransferAction = async (input: unknown) => act((ctx) => ops.createAgencyTransfer(ctx, input), "Repasse registrado no financeiro.");
+
+// ------------------------------ Administração ------------------------------
+export const saveExpenseCategoryAction = async (id: string | null, input: unknown) => act((ctx) => admin.saveExpenseCategory(ctx, id, input), "Categoria salva.");
+export const saveCardFeeAction = async (id: string | null, input: unknown) => act((ctx) => admin.saveCardFee(ctx, id, input), "Taxa salva.");
+export const updateCompanyProfileAction = async (input: unknown) => act((ctx) => admin.updateCompanyProfile(ctx, input), "Dados da agência salvos.");
+export const updateMeAction = async (input: unknown) => act((ctx) => admin.updateMe(ctx, input), "Dados atualizados.");
+export const changePasswordAction = async (input: unknown) => act((ctx) => admin.changePassword(ctx, input), "Senha alterada.");

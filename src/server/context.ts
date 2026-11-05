@@ -11,6 +11,7 @@ export type Ctx = {
   companyId: string;
   companyName: string;
   isDemo: boolean;
+  logoKey: string | null;
   role: Role;
   timezone: string;
   permissions: Set<Permission>;
@@ -21,7 +22,7 @@ export async function loadContext(userId: string): Promise<Ctx | null> {
     where: { id: userId },
     include: { company: { include: { rolePermissions: true } } },
   });
-  if (!user || !user.active) return null;
+  if (!user || !user.active || !user.company.active) return null;
   const role = user.role as Role;
   return {
     userId: user.id,
@@ -29,6 +30,7 @@ export async function loadContext(userId: string): Promise<Ctx | null> {
     companyId: user.companyId,
     companyName: user.company.name,
     isDemo: user.company.isDemo,
+    logoKey: user.company.logoKey,
     role,
     timezone: user.company.timezone,
     permissions: resolvePermissions(

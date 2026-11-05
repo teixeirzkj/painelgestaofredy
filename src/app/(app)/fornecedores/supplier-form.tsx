@@ -6,15 +6,15 @@ import { Button, Field, Input, Select, Textarea } from "@/components/ui";
 import { ConfirmDialog, Modal } from "@/components/ui/client";
 import { useAction, issuesToMap } from "@/components/use-action";
 import { archiveSupplierAction, saveSupplierAction } from "@/app/actions";
-import { SUPPLIER_CATEGORIES } from "@/lib/constants";
+import { BILLING_CYCLES, SUPPLIER_CATEGORIES } from "@/lib/constants";
 import { formatDocument } from "@/lib/utils";
 
-type S = { name: string; document: string | null; contactName: string | null; email: string | null; phone: string | null; category: string; bankInfo: string | null; pixKey: string | null; notes: string | null };
+type S = { name: string; document: string | null; contactName: string | null; email: string | null; phone: string | null; category: string; billingCycle?: string; bankInfo: string | null; pixKey: string | null; notes: string | null };
 
 export function SupplierButton({ id, initial }: { id?: string; initial?: S }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [d, setD] = useState<S>(initial ? { ...initial, document: initial.document ? formatDocument(initial.document) : "" } : { name: "", document: "", contactName: "", email: "", phone: "", category: "OPERADORA", bankInfo: "", pixKey: "", notes: "" });
+  const [d, setD] = useState<S>(initial ? { ...initial, document: initial.document ? formatDocument(initial.document) : "" } : { name: "", document: "", contactName: "", email: "", phone: "", category: "OPERADORA", billingCycle: "AVULSO", bankInfo: "", pixKey: "", notes: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { run, busy } = useAction();
   const set = (k: keyof S) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setD({ ...d, [k]: e.target.value });
@@ -59,6 +59,15 @@ export function SupplierButton({ id, initial }: { id?: string; initial?: S }) {
               {SUPPLIER_CATEGORIES.values.map((v) => (
                 <option key={v} value={v}>
                   {SUPPLIER_CATEGORIES.label(v)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Faturamento" hint="Decendial: entra na conciliação por decêndio">
+            <Select value={d.billingCycle ?? "AVULSO"} onChange={set("billingCycle")}>
+              {BILLING_CYCLES.values.map((v) => (
+                <option key={v} value={v}>
+                  {BILLING_CYCLES.label(v)}
                 </option>
               ))}
             </Select>

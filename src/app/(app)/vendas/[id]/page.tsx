@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
-import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History, Paperclip, Plane, UserRound, Check, CircleDashed, Bus, Webhook } from "lucide-react";
+import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History, Paperclip, Plane, UserRound, Check, CircleDashed, Bus, Webhook, ShieldCheck } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { getSale, getSaleAudit } from "@/server/services/sales";
@@ -18,6 +18,8 @@ import { SaleHeaderActions } from "../sale-actions";
 import { ReservationEditor } from "./reservation-editor";
 import { PrepareContractButton } from "./prepare-contract";
 import { RefundButton, TripLink } from "./sale-extras";
+import { RequestEditButton } from "../../solicitacoes/review-client";
+import { NewCreditButton } from "../../creditos/credit-client";
 
 export const metadata = { title: "Venda" };
 
@@ -42,6 +44,8 @@ export default async function SalePage({ params }: { params: Params }) {
   const salesRec = s.receivables.filter((r) => r.origin === "VENDA");
   const otherRec = s.receivables.filter((r) => r.origin !== "VENDA");
   const confirmed = s.status === "CONFIRMADA" || s.status === "CONCLUIDA";
+  // venda conferida: só o financeiro edita direto; os demais pedem a edição
+  const editLocked = !!s.reviewedAt && !can(ctx, "finance.manage");
   const activeRec = salesRec.filter((r) => r.status !== "CANCELADO");
   const received = sum(activeRec.map((r) => r.settledCents));
   const toReceive = sum(activeRec.map((r) => r.amountCents));
@@ -102,12 +106,21 @@ export default async function SalePage({ params }: { params: Params }) {
                 <Webhook className="h-3 w-3" /> recebida por integração
               </Badge>
             )}
+            {s.reviewedAt && (
+              <Badge tone="green">
+                <ShieldCheck className="h-3 w-3" /> Conferida pelo financeiro
+              </Badge>
+            )}
           </>
         }
         actions={
           <>
             {can(ctx, "finance.manage") && s.status !== "ORCAMENTO" && <RefundButton saleId={s.id} suppliers={suppliers} today={t} />}
-            <SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} />
+            {s.status === "CANCELADA" && can(ctx, "sales.create") && (
+              <NewCreditButton variant="outline" label="Gerar crédito ao cliente" fixedClient={{ id: s.client.id, name: s.client.name }} originSaleId={s.id} defaultAmount={sum(salesRec.map((r) => r.settledCents))} />
+            )}
+            {editLocked && s.permissions.canEdit && s.status !== "CANCELADA" && <RequestEditButton saleId={s.id} />}
+            <SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit && !editLocked} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} />
           </>
         }
       />

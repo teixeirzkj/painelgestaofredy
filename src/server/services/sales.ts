@@ -6,7 +6,8 @@ import { saleInputSchema, refundSchema, type SaleParsed } from "./schemas";
 import { calculateSale, entryStatus, supplierRemittance, validateSaleFinancials, type SellerCommissionRule } from "@/lib/finance";
 import { REFUND_KINDS, type CommercialModel } from "@/lib/constants";
 import { addDays, addMonths, startOfMonth } from "@/lib/dates";
-import { sum } from "@/lib/money";
+import { applyBps, sum } from "@/lib/money";
+import { pickCardFee } from "./admin";
 import { newKey } from "@/lib/utils";
 import { emitEvent } from "./automations";
 import { prepareContractForSale } from "./contracts";
@@ -200,6 +201,17 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
     (await tx.client.findMany({ where: { id: { in: payerIds }, companyId: ctx.companyId }, select: { id: true, name: true } })).map((c) => [c.id, c.name]),
   );
 
+  // Taxa da maquininha: cartão que entra no caixa da agência vence na liquidação e gera a taxa como despesa (Deduções)
+  const rates = await tx.cardFeeRate.findMany({ where: { companyId: ctx.companyId, active: true } });
+  const cardCount = (method: string) => plan.filter((x) => x.method === method).length;
+  const fees = plan
+    .map((p) => {
+      const rate = pickCardFee(rates, p.method, cardCount(p.method));
+      return rate ? { p, rate, settleDate: addDays(p.dueDate, rate.settlementDays), fee: applyBps(p.amountCents, rate.rateBps) } : null;
+    })
+    .filter(Boolean) as { p: PlanItem; rate: { rateBps: number; settlementDays: number }; settleDate: string; fee: number }[];
+  const feeByKey = new Map(fees.map((f) => [f.p.key, f]));
+
   // 1) Contas a receber do cliente (parcelas)
   const existingRec = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "VENDA" } });
   await syncEntries(
@@ -210,7 +222,7 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
     plan.map((p, i) => ({
       sourceKey: `venda:${saleId}:parcela:${p.key}`,
       amountCents: p.amountCents,
-      dueDate: p.dueDate,
+      dueDate: feeByKey.get(p.key)?.settleDate ?? p.dueDate,
       method: p.method,
       description: p.description || `${sale.code} · ${(p.payerClientId && payers.get(p.payerClientId)) || sale.client.name} · Parcela ${i + 1}/${plan.length}`,
       installmentNumber: i + 1,
@@ -218,6 +230,23 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
       clientId: p.payerClientId && payers.has(p.payerClientId) ? p.payerClientId : sale.clientId,
     })),
     { origin: "VENDA", saleId, category: "VENDAS" },
+  );
+
+  // 1b) Taxas de cartão da maquininha (uma conta a pagar por parcela no cartão)
+  await syncEntries(
+    tx,
+    "payable",
+    ctx,
+    await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "TAXA_CARTAO" } }),
+    fees
+      .filter((f) => f.fee > 0)
+      .map((f) => ({
+        sourceKey: `taxa-cartao:${saleId}:${f.p.key}`,
+        amountCents: f.fee,
+        dueDate: f.settleDate,
+        description: `${sale.code} · Taxa de cartão (${(f.rate.rateBps / 100).toLocaleString("pt-BR")}%)`,
+      })),
+    { origin: "TAXA_CARTAO", saleId, category: "TAXA_CARTAO" },
   );
 
   // 2) Contas a pagar a fornecedores (custos dos itens em intermediação/revenda)
@@ -443,6 +472,13 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
   return prisma.$transaction(async (tx) => {
     const sale = await getEditableSale(tx, ctx, id);
     if (sale.status === "CANCELADA") throw new AppError("Venda cancelada não pode ser alterada.");
+    // Venda conferida pelo financeiro: só o financeiro edita direto; os demais precisam de solicitação aprovada.
+    let approvedRequestId: string | null = null;
+    if (sale.reviewedAt && !can(ctx, "finance.manage")) {
+      const req = await tx.editRequest.findFirst({ where: { saleId: id, companyId: ctx.companyId, status: "APROVADA" } });
+      if (!req) throw new AppError("Esta venda já foi conferida pelo financeiro. Solicite a edição pela própria venda.", "FORBIDDEN");
+      approvedRequestId = req.id;
+    }
     const willBeConfirmed = sale.status !== "ORCAMENTO" || input.confirm;
     const totals = computeTotals({ ...input, confirm: willBeConfirmed });
     const { client, sellerId } = await validateRefs(tx, ctx, { ...input, sellerId: input.sellerId ?? sale.sellerId }, id);
@@ -482,8 +518,10 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
         ...saleData(input, totals),
         sellerId,
         ...(confirmingNow ? { status: "CONFIRMADA", confirmedAt: new Date() } : {}),
+        ...(approvedRequestId ? { reviewedAt: null, reviewedById: null } : {}),
       },
     });
+    if (approvedRequestId) await tx.editRequest.update({ where: { id: approvedRequestId }, data: { status: "UTILIZADA" } });
     if (willBeConfirmed) {
       await syncConfirmedSale(tx, ctx, id);
       await emitConfirmed(tx, ctx, id, sale.code, client, totals.grossCents);

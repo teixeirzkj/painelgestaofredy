@@ -33,7 +33,49 @@ function today() {
 type Opt = { id: string; name: string };
 type EntryExtra = { costCenter?: Opt | null; invoice?: { id: string; number: string; status: string } | null };
 
-export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr, costCenters = [] }: { kind: Kind; openId?: string; accounts: Opt[]; canManage: boolean; todayStr: string; costCenters?: Opt[] }) {
+type CatOpt = { value: string; label: string; group: string };
+
+/** Opções de categoria: despesas vêm do cadastro editável da agência (agrupadas); receitas são fixas. */
+function CategoryOptions({ kind, expense }: { kind: Kind; expense: CatOpt[] }) {
+  if (kind === "receivable")
+    return (
+      <>
+        {RECEIVABLE_CATEGORIES.values.map((v) => (
+          <option key={v} value={v}>
+            {RECEIVABLE_CATEGORIES.label(v)}
+          </option>
+        ))}
+      </>
+    );
+  const groups = [...new Set(expense.map((c) => c.group))];
+  if (!expense.length)
+    return (
+      <>
+        {PAYABLE_CATEGORIES.values.map((v) => (
+          <option key={v} value={v}>
+            {PAYABLE_CATEGORIES.label(v)}
+          </option>
+        ))}
+      </>
+    );
+  return (
+    <>
+      {groups.map((g) => (
+        <optgroup key={g} label={g}>
+          {expense
+            .filter((c) => c.group === g)
+            .map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+        </optgroup>
+      ))}
+    </>
+  );
+}
+
+export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr, costCenters = [], expenseCategories = [] }: { kind: Kind; openId?: string; accounts: Opt[]; canManage: boolean; todayStr: string; costCenters?: Opt[]; expenseCategories?: CatOpt[] }) {
   companyToday = todayStr;
   const router = useRouter();
   const pathname = usePathname();
@@ -99,7 +141,7 @@ export function EntryDrawerHost({ kind, openId, accounts, canManage, todayStr, c
       ) : mode === "settle" ? (
         <SettleForm kind={kind} entry={entry} accounts={accounts} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
       ) : mode === "edit" ? (
-        <EditForm kind={kind} entry={entry} costCenters={costCenters} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
+        <EditForm kind={kind} entry={entry} costCenters={costCenters} expenseCategories={expenseCategories} onDone={() => (setMode("view"), load())} onCancel={() => setMode("view")} />
       ) : (
         <EntryDetails kind={kind} entry={entry} canManage={canManage} reload={load} onClosed={close} />
       )}
@@ -354,8 +396,7 @@ function SettleForm({ kind, entry, accounts, onDone, onCancel }: { kind: Kind; e
   );
 }
 
-function EditForm({ kind, entry, costCenters, onDone, onCancel }: { kind: Kind; entry: Entry; costCenters: Opt[]; onDone: () => void; onCancel: () => void }) {
-  const cats = kind === "receivable" ? RECEIVABLE_CATEGORIES : PAYABLE_CATEGORIES;
+function EditForm({ kind, entry, costCenters, expenseCategories, onDone, onCancel }: { kind: Kind; entry: Entry; costCenters: Opt[]; expenseCategories: CatOpt[]; onDone: () => void; onCancel: () => void }) {
   const extra = entry as Entry & EntryExtra;
   const [d, setD] = useState({ description: entry.description, amountCents: entry.amountCents, dueDate: entry.dueDate, category: entry.category, method: entry.method ?? "", notes: entry.notes ?? "", costCenterId: extra.costCenter?.id ?? "" });
   const { run, busy } = useAction();
@@ -379,11 +420,7 @@ function EditForm({ kind, entry, costCenters, onDone, onCancel }: { kind: Kind; 
         </Field>
         <Field label="Categoria">
           <Select value={d.category} onChange={(e) => setD({ ...d, category: e.target.value })}>
-            {cats.values.map((v) => (
-              <option key={v} value={v}>
-                {cats.label(v)}
-              </option>
-            ))}
+            <CategoryOptions kind={kind} expense={expenseCategories} />
           </Select>
         </Field>
         <Field label="Forma prevista">
@@ -424,11 +461,10 @@ function EditForm({ kind, entry, costCenters, onDone, onCancel }: { kind: Kind; 
   );
 }
 
-export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayStr: string; options: { clients: Opt[]; suppliers: Opt[]; costCenters?: Opt[] } }) {
+export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayStr: string; options: { clients: Opt[]; suppliers: Opt[]; costCenters?: Opt[]; expenseCategories?: CatOpt[] } }) {
   companyToday = todayStr;
   const [open, setOpen] = useState(false);
   const isRec = kind === "receivable";
-  const cats = isRec ? RECEIVABLE_CATEGORIES : PAYABLE_CATEGORIES;
   const init = { description: "", partyId: "", category: isRec ? "OUTRAS_RECEITAS" : "ADMINISTRATIVAS", amountCents: 0, firstDueDate: today(), installments: 1, recurringMonths: 1, method: "", notes: "", costCenterId: "", mode: "unico" as "unico" | "parcelado" | "recorrente" };
   const [d, setD] = useState(init);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -478,11 +514,7 @@ export function NewEntryButton({ kind, options, todayStr }: { kind: Kind; todayS
           </Field>
           <Field label="Categoria" required>
             <Select value={d.category} onChange={(e) => setD({ ...d, category: e.target.value })}>
-              {cats.values.map((v) => (
-                <option key={v} value={v}>
-                  {cats.label(v)}
-                </option>
-              ))}
+              <CategoryOptions kind={kind} expense={options.expenseCategories ?? []} />
             </Select>
           </Field>
           <Field label={isRec ? "Cliente (opcional)" : "Fornecedor (opcional)"}>
