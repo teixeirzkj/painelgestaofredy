@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Button, Field, Input } from "@/components/ui";
+import { PasswordInput } from "@/components/ui/client";
 import { useAction, issuesToMap } from "@/components/use-action";
 import { changePasswordAction, updateMeAction } from "@/app/actions";
 
@@ -53,13 +54,13 @@ export function PasswordForm() {
       }}
     >
       <Field label="Senha atual" error={errors.current}>
-        <Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} />
+        <PasswordInput autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} />
       </Field>
       <Field label="Nova senha" hint="Mínimo de 8 caracteres." error={errors.next}>
-        <Input type="password" autoComplete="new-password" value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} />
+        <PasswordInput autoComplete="new-password" value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} />
       </Field>
       <Field label="Confirmar nova senha" error={errors.confirm}>
-        <Input type="password" autoComplete="new-password" value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} />
+        <PasswordInput autoComplete="new-password" value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} />
       </Field>
       <div className="flex justify-end">
         <Button type="submit" loading={busy} disabled={!f.current || !f.next}>

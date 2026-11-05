@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Plus, Pencil, KeyRound, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button, Card, CardHeader, Field, Input, Select, Notice } from "@/components/ui";
-import { Modal } from "@/components/ui/client";
+import { Modal, PasswordInput } from "@/components/ui/client";
 import { useAction, issuesToMap } from "@/components/use-action";
 import { rotateApiKeyAction, saveUserAction, setRolePermissionAction, updateCompanyAction } from "@/app/actions";
 import { ROLES } from "@/lib/constants";
@@ -71,7 +71,7 @@ export function IntegrationsForm({ hasApiKey, webhookUrl, hasSecret, base }: { h
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
           </Field>
           <Field label="Segredo para assinatura HMAC" hint="Enviado como X-Fredy-Signature (SHA-256 do corpo).">
-            <Input value={secret} onChange={(e) => setSecret(e.target.value)} type="password" autoComplete="new-password" />
+            <PasswordInput value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
           </Field>
           <div className="flex justify-end">
             <Button loading={busy} onClick={() => run(() => updateCompanyAction({ ...base, webhookUrl: url, webhookSecret: secret }))}>
@@ -192,7 +192,7 @@ export function UserButton({ user }: { user?: U }) {
             <Input type="number" min={0} max={100} step={0.5} value={d.commissionRateBps / 100} onChange={(e) => setD({ ...d, commissionRateBps: Math.round(Number(e.target.value) * 100) })} />
           </Field>
           <Field label={user ? "Nova senha (deixe em branco para manter)" : "Senha inicial"} error={errors.password}>
-            <Input type="password" autoComplete="new-password" value={d.password} onChange={(e) => setD({ ...d, password: e.target.value })} />
+            <PasswordInput autoComplete="new-password" value={d.password} onChange={(e) => setD({ ...d, password: e.target.value })} />
           </Field>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={d.active} onChange={(e) => setD({ ...d, active: e.target.checked })} /> Usuário ativo

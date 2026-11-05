@@ -1,9 +1,29 @@
 "use client";
 import * as React from "react";
-import { X } from "lucide-react";
+import { X, Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { centsToInput, parseBRL } from "@/lib/money";
 import { Button, Field, Input, Textarea } from "./index";
+
+/** Campo de senha com botão para mostrar/ocultar o que está sendo digitado. */
+export const PasswordInput = React.forwardRef<HTMLInputElement, Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">>(function PasswordInput({ className, ...p }, ref) {
+  const [show, setShow] = React.useState(false);
+  return (
+    <div className="relative">
+      <Input ref={ref} type={show ? "text" : "password"} className={cn("pr-10", className)} autoCapitalize="none" autoCorrect="off" spellCheck={false} {...p} />
+      <button
+        type="button"
+        onClick={() => setShow((v) => !v)}
+        className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-md text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-brand-600"
+        aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+        aria-pressed={show}
+        title={show ? "Ocultar senha" : "Mostrar senha"}
+      >
+        {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      </button>
+    </div>
+  );
+});
 
 /** Campo monetário: mostra "1.234,56", entrega centavos. */
 export function MoneyInput({ value, onChange, className, ...rest }: { value: number | null | undefined; onChange: (cents: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {

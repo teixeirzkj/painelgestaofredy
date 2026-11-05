@@ -165,16 +165,24 @@ export async function addCompanyAdmin(p: PlatformCtx, companyId: string, raw: un
 }
 
 /**
- * Primeiro acesso em produção: se ainda não existe nenhum usuário da plataforma e as variáveis
- * PLATFORM_BOOTSTRAP_EMAIL / PLATFORM_BOOTSTRAP_PASSWORD estão definidas, o login com esses dados cria o usuário.
- * Depois do primeiro acesso, remova as variáveis.
+ * Acesso de recuperação/primeiro acesso: enquanto as variáveis PLATFORM_BOOTSTRAP_EMAIL /
+ * PLATFORM_BOOTSTRAP_PASSWORD estiverem definidas (senha com 10+ caracteres), o login com exatamente esses dados
+ * cria o usuário da plataforma ou redefine a senha dele para a das variáveis, e o reativa.
+ * Quem controla as variáveis da Vercel já controla o sistema, então isso não amplia o acesso.
+ * Depois de entrar, remova as variáveis.
  */
 async function bootstrapPlatformUser(email: string, pass: string) {
   const be = process.env.PLATFORM_BOOTSTRAP_EMAIL?.trim().toLowerCase();
-  const bp = process.env.PLATFORM_BOOTSTRAP_PASSWORD;
-  if (!be || !bp || bp.length < 10 || email !== be || pass !== bp) return;
-  if ((await prisma.platformUser.count()) > 0) return;
-  await prisma.platformUser.create({ data: { name: "Administrador da plataforma", email: be, passwordHash: await bcrypt.hash(bp, 10) } });
+  const bp = process.env.PLATFORM_BOOTSTRAP_PASSWORD?.trim();
+  if (!be || !bp || bp.length < 10 || email !== be || pass.trim() !== bp) return;
+  const existing = await prisma.platformUser.findUnique({ where: { email: be } });
+  if (existing && existing.active && (await bcrypt.compare(pass, existing.passwordHash))) return;
+  const passwordHash = await bcrypt.hash(pass, 10);
+  await prisma.platformUser.upsert({
+    where: { email: be },
+    create: { name: "Administrador da plataforma", email: be, passwordHash },
+    update: { passwordHash, active: true },
+  });
 }
 
 export async function platformLogin(email: string, pass: string) {
