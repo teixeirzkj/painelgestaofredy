@@ -11,6 +11,7 @@ import { prisma } from "@/server/db";
 import { headers } from "next/headers";
 import { createSession, destroySession, getContext, requireContext } from "@/server/auth";
 import * as admin from "@/server/services/admin";
+import { platformLogin, createPlatformSession } from "@/server/platform";
 import * as team from "@/server/services/team";
 import * as ops from "@/server/services/ops";
 import { toResult, AppError, type ActionResult } from "@/server/errors";
@@ -52,6 +53,15 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
   if (ok && !user.company.active) {
     await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "FALHA", ...meta });
     return { error: "A conta desta agência está suspensa. Fale com o suporte Frédy." };
+  }
+  if (!ok && !user) {
+    // Login da equipe da plataforma digitado na tela das agências: leva direto ao painel da plataforma.
+    const pu = await platformLogin(email, password);
+    if (pu) {
+      attempts.delete(email);
+      await createPlatformSession(pu.id);
+      redirect("/plataforma");
+    }
   }
   if (!ok) {
     await admin.logAccess({ companyId: user?.companyId ?? null, userId: user?.id ?? null, email, type: "FALHA", ...meta });
