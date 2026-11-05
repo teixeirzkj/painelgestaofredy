@@ -9,6 +9,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import * as fredy from "@/server/services/fredy";
+import * as zapsign from "@/server/services/zapsign";
 import { prisma } from "@/server/db";
 import { headers } from "next/headers";
 import { createSession, destroySession, getContext, requireContext } from "@/server/auth";
@@ -216,3 +217,8 @@ export const saveFredyMappingAction = async (input: unknown) => act((ctx) => fre
 export const testFredyAction = async () => act((ctx) => fredy.testFredyConnection(ctx));
 export const registerFredyWebhookAction = async () => act(async (ctx) => (assertCan(ctx, "settings.manage"), fredy.registerFredyWebhook(ctx.companyId)));
 export const disconnectFredyAction = async () => act((ctx) => fredy.disconnectFredy(ctx), "Frédy desconectado.");
+
+// ------------------------------ Assinatura online (ZapSign) ------------------------------
+export const sendContractToSignatureAction = async (id: string, input: unknown) =>
+  act((ctx) => (dispatchSoon(ctx.companyId), zapsign.sendContractToZapSign(ctx, id, input)), "Contrato enviado para assinatura.");
+export const checkContractSignatureAction = async (id: string) => act((ctx) => (dispatchSoon(ctx.companyId), zapsign.checkContractSignature(ctx, id)));

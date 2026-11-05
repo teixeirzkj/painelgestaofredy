@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Building2, CircleCheck, CirclePause, Users } from "lucide-react";
 import { listCompanies, platformOverview } from "@/server/platform";
+import { signatureUsageByCompany } from "@/server/services/zapsign";
+import { formatBRL } from "@/lib/money";
 import { Badge, Card, EmptyState, KpiCard, PageHeader, Table, Td, Th } from "@/components/ui";
 import { FilterForm, FilterSearch } from "@/components/filter-form";
 import { formatDateTime } from "@/lib/dates";
@@ -11,7 +13,8 @@ export const metadata = { title: "Plataforma · Agências" };
 
 export default async function PlatformHome({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
-  const [o, companies] = await Promise.all([platformOverview(), listCompanies(str(sp, "q"))]);
+  const month = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).format(new Date()).slice(0, 7);
+  const [o, companies, usage] = await Promise.all([platformOverview(), listCompanies(str(sp, "q")), signatureUsageByCompany(month)]);
   return (
     <>
       <PageHeader title="Agências clientes" description="Crie a conta de cada agência, entregue o login do administrador e acompanhe o uso." actions={<NewCompanyButton />} />
@@ -37,6 +40,7 @@ export default async function PlatformHome({ searchParams }: { searchParams: Sea
                 <Th>Administrador</Th>
                 <Th align="center">Usuários</Th>
                 <Th align="center">Vendas</Th>
+                <Th align="center">Assinaturas no mês</Th>
                 <Th>Último acesso</Th>
                 <Th>Situação</Th>
               </tr>
@@ -58,6 +62,13 @@ export default async function PlatformHome({ searchParams }: { searchParams: Sea
                   </Td>
                   <Td align="center">{c._count.users}</Td>
                   <Td align="center">{c._count.sales}</Td>
+                  <Td align="center" className="text-sm">
+                    {usage.get(c.id) ? (
+                      <span title={`Custo: ${formatBRL(usage.get(c.id)!.costCents)}`}>{usage.get(c.id)!.count}</span>
+                    ) : (
+                      <span className="text-subtle">0</span>
+                    )}
+                  </Td>
                   <Td className="text-sm text-slate-600">{c.lastLoginAt ? formatDateTime(c.lastLoginAt, c.timezone) : "nunca"}</Td>
                   <Td>{c.active ? <Badge tone="green" dot>Ativa</Badge> : <Badge tone="amber" dot>Suspensa</Badge>}</Td>
                 </tr>

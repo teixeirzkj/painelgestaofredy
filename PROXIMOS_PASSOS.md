@@ -21,17 +21,19 @@ Marcadores:
 
 ## Fase 1 — Publicar na Vercel
 
-1. [ ] **(você)** Liberar o GitHub. Em *teteateteproject/paineldegestao → Settings → Collaborators*, adicione `teixeirzkj` com escrita. **(eu)** faço o `git push` em seguida.
+No ar em https://painelgestaofredy.vercel.app (GitHub teixeirzkj/painelgestaofredy, banco Neon em São Paulo).
+
+1. [x] **(você)** Liberar o GitHub. Em *teteateteproject/paineldegestao → Settings → Collaborators*, adicione `teixeirzkj` com escrita. **(eu)** faço o `git push` em seguida.
    - Sem GitHub também dá: `npx vercel login` e `npx vercel --prod` direto desta máquina.
-2. [ ] **(você)** Criar a conta e o projeto na Vercel, que pode ser o plano Hobby para começar: *Add New → Project → Import* do repositório `paineldegestao`.
-3. [ ] **(você)** Ainda no projeto, em *Storage → Create Database → Neon (Postgres)*:
+2. [x] **(você)** Criar a conta e o projeto na Vercel, que pode ser o plano Hobby para começar: *Add New → Project → Import* do repositório `paineldegestao`.
+3. [x] **(você)** Ainda no projeto, em *Storage → Create Database → Neon (Postgres)*:
    - Escolha a região **São Paulo (sa-east-1)**.
    - A integração cria sozinha `DATABASE_URL` e `DATABASE_URL_UNPOOLED`.
-4. [ ] **(você)** Em *Settings → Environment Variables* (Production), criar:
+4. [x] **(você)** Em *Settings → Environment Variables* (Production), criar:
    - `AUTH_SECRET`: 64 caracteres aleatórios. **(eu)** gero para você.
    - `CRON_SECRET`: 32 ou mais caracteres aleatórios.
    - `PLATFORM_BOOTSTRAP_EMAIL` e `PLATFORM_BOOTSTRAP_PASSWORD`: o seu acesso ao painel da plataforma.
-5. [ ] **(você)** Fazer o deploy. O build roda as migrações e cria as tabelas.
+5. [x] **(você)** Fazer o deploy. O build roda as migrações e cria as tabelas.
 6. [ ] **(você/eu)** Primeiro acesso:
    - Entre em `https://<projeto>.vercel.app/plataforma/login` com o e-mail e a senha do passo 4.
    - Crie a agência da cliente com o login do administrador dela.
@@ -47,46 +49,31 @@ Marcadores:
 
 ## Fase 2 — Integração com o CRM Frédy (WTS)
 
-Pré-requisito: a Fase 1 concluída, porque o Frédy precisa de um endereço público para avisar o sistema.
+- [x] **(eu)** Conector Frédy por agência, em *Configurações → Integrações*:
+  - a agência cola o token da API (`pn_...`), que é validado no Frédy e guardado criptografado;
+  - escolhe o painel de vendas, as etapas (orçamento, ganho, perdido) e os campos do card (destino, ida, volta, passageiros);
+  - ao salvar, o sistema registra sozinho o webhook no Frédy.
+- [x] **(eu)** **Card ganho → venda**: card do painel de vendas marcado como ganho (ou movido para a etapa de ganho) cria a venda em rascunho, com o cliente vinculado ao contato do Frédy, o valor e os dados do card. Nunca duplica. Card ganho sem valor recebe uma nota pedindo o valor e a venda é criada quando ele for preenchido.
+- [x] **(eu)** **Contatos**: contato atualizado no Frédy atualiza nome, e-mail e WhatsApp do cliente vinculado.
+- [x] **(eu)** **Gestão → Frédy**: venda confirmada marca o card como ganho, com o valor final e uma nota com o código e o link da venda; pagamento recebido vira nota no card.
+- [ ] **(você)** Gerar o token em *Frédy → Ajustes → Integrações → Integração via API → Novo* e colar em *Configurações → Integrações* da agência.
+- [ ] **(você/eu)** Teste ponta a ponta com um card real de teste.
+- [ ] **(você)** Aprovar no WhatsApp os modelos de mensagem. **(eu)** escrevo os textos e faço o disparo pelo Frédy respeitando o consentimento (LGPD): pagamento recebido, lembrete de parcela, contrato para assinatura, pré-viagem, pós-viagem.
 
-1. [ ] **(você)** Gerar o token da API em *Frédy → Ajustes → Integrações → Integração via API* (começa com `pn_`). Ele vai nas variáveis da Vercel, não no chat.
-2. [ ] **(você)** Informar:
-   - qual painel do CRM é o de vendas;
-   - quais etapas significam *orçamento*, *ganho* e *perdido*;
-   - quais campos personalizados os cards têm (destino, datas, valor, passageiros, forma de pagamento).
-3. [ ] **(eu)** Conector Frédy no sistema, com as configurações por agência (token e mapeamento de etapas) em Configurações → Integrações.
-4. [ ] **(eu)** **Card ganho → venda**: o webhook `PANEL_CARD_STEP_CHANGE` / status `WON` cria a venda com cliente, valor, destino e datas, prepara o contrato e mostra tudo no painel.
-   - Se o card trouxer forma de pagamento e parcelas, a venda entra confirmada. Se não trouxer, entra como rascunho e o vendedor confirma com um clique.
-5. [ ] **(eu)** **Contatos**: o cliente fica vinculado ao contato do Frédy (`fredyContactId`), e criar ou atualizar de um lado reflete do outro.
-6. [ ] **(eu)** **Gestão → Frédy**:
-   - venda confirmada move o card, marca como ganho, lança o valor e deixa uma nota com o link da venda;
-   - pagamento recebido vira nota e etiqueta no card.
-7. [ ] **(você)** Aprovar no WhatsApp os modelos de mensagem. **(eu)** escrevo os textos:
-   - pagamento recebido;
-   - lembrete de parcela;
-   - contrato para assinatura;
-   - pré-viagem (check-in e documentos);
-   - boas-vindas na volta e pesquisa de satisfação.
-8. [ ] **(eu)** Disparo dos modelos pelo Frédy, respeitando o consentimento do cliente (LGPD), sem duplicar e com registro em Automações.
-9. [ ] **(eu)** Testes ponta a ponta com um card real de teste.
+## Fase 3 — Venda por print com IA
 
-## Fase 3 — Venda por print com IA (fluxo pedido pela cliente)
-
-1. [ ] **(você)** Criar a chave da **API da Anthropic (Claude)** e colocá-la nas variáveis da Vercel (`ANTHROPIC_API_KEY`).
-2. [ ] **(eu)** "Nova venda por print": o vendedor envia a imagem ou PDF da reserva, ou a tela do fornecedor.
-3. [ ] **(eu)** A IA extrai cliente, passageiros, produtos, fornecedor, localizador, datas e valores. Os dados vêm **pré-preenchidos** no formulário, nunca gravados sem revisão.
-4. [ ] **(eu)** O vendedor ajusta a forma de pagamento e o valor, confirma, e o financeiro e o contrato são gerados automaticamente.
-5. [ ] **(eu)** O mesmo leitor usado na **importação do PDF da fatura** da Azul Viagens e de outras consolidadoras, preenchendo e conferindo a fatura automaticamente na conciliação por decêndio.
+- [x] **(eu)** "Preencher pelo print da reserva" na nova venda e nos rascunhos: envio, arrastar ou colar (Ctrl+V) imagem ou PDF.
+- [x] **(eu)** A IA extrai cliente, passageiros, produtos, fornecedor, localizador, datas e valores e **pré-preenche** o formulário. Nada é gravado sem revisão; o cliente e o fornecedor são vinculados quando já existem no cadastro.
+- [ ] **(você)** Criar a chave da API da Anthropic (Claude) em console.anthropic.com e colocá-la na Vercel como `ANTHROPIC_API_KEY`. Sem ela a tela avisa que a leitura não está ativada.
+- [ ] **(eu)** O mesmo leitor para o PDF da fatura das consolidadoras (conferência por decêndio).
 
 ## Fase 4 — Contrato com assinatura online (ZapSign)
 
-1. [ ] **(você)** Contratar a ZapSign (cerca de R$ 1,00 por contrato) e gerar o token da API.
-2. [ ] **(eu)** Botão "Enviar para assinatura":
-   - gera o PDF e envia aos signatários (WhatsApp ou e-mail);
-   - o status volta pelo webhook e o contrato só vira "Assinado" com a confirmação da ZapSign;
-   - o documento assinado é arquivado na venda.
-3. [ ] **(eu)** Lançamento automático de R$ 1,00 por envio em contas a pagar, categoria Sistemas, que aparece no DRE.
-4. [ ] **(você)** Revisão jurídica dos modelos de contrato. Os modelos atuais são rascunhos.
+- [x] **(eu)** Botão "Enviar para assinatura" no contrato emitido: o cliente recebe o link por e-mail (e, se marcado, por WhatsApp da ZapSign); a agência também assina quando o responsável e o e-mail estão em Configurações. Há "Copiar link de assinatura" e "Consultar status".
+- [x] **(eu)** O contrato só vira "Assinado" quando a ZapSign confirma: o webhook avisa e o sistema consulta o documento na API antes de marcar. O PDF assinado é anexado à venda. Recusa do cliente cancela o contrato.
+- [x] **(eu)** Cada envio lança R$ 1,00 em contas a pagar da agência (categoria Sistemas, entra no DRE) e aparece no painel da plataforma em "Assinaturas no mês", para a cobrança.
+- [ ] **(você)** Contratar a ZapSign, gerar o token da API (*Configurações → Integrações → API ZapSign*) e colocá-lo na Vercel como `ZAPSIGN_API_TOKEN`. O webhook é registrado sozinho no primeiro envio.
+- [ ] **(você)** Revisão jurídica dos modelos de contrato. Os modelos atuais são rascunhos.
 
 ## Fase 5 — Pagamentos e bancos
 

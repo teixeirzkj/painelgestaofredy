@@ -68,6 +68,7 @@ model Company {
   automationEvents   AutomationEvent[]
   fredyIntegration   FredyIntegration?
   fredyEvents        FredyWebhookEvent[]
+  signatureRequests  SignatureRequest[]
   auditLogs          AuditLog[]
   attachments        Attachment[]
   statementLines     BankStatementLine[]
@@ -534,6 +535,7 @@ model Contract {
   signatureProvider String?
   externalId        String?
   sentAt            DateTime?
+  signUrl           String? // link de assinatura do cliente (provedor)
   signedAt          DateTime?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
@@ -951,4 +953,28 @@ model FredyWebhookEvent {
   createdAt DateTime @default(now())
 
   @@index([companyId, createdAt])
+}
+
+/// Cada envio para assinatura eletrônica (base para a cobrança da plataforma às agências).
+model SignatureRequest {
+  id         String    @id @default(cuid())
+  companyId  String
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contractId String
+  saleId     String
+  provider   String // ZAPSIGN
+  externalId String    @unique // token do documento no provedor
+  costCents  Int
+  status     String // ENVIADO | ASSINADO | RECUSADO
+  createdAt  DateTime  @default(now())
+  signedAt   DateTime?
+
+  @@index([companyId, createdAt])
+}
+
+/// Configurações internas da plataforma (chave-valor), ex.: id do webhook da ZapSign.
+model PlatformSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
 }

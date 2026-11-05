@@ -7,6 +7,8 @@ import { ContractStatusBadge } from "@/components/status";
 import { formatDateTime } from "@/lib/dates";
 import type { Params } from "@/lib/params";
 import { ContractActions } from "./contract-actions";
+import { zapsignConfigured, signatureCostCents } from "@/server/services/zapsign";
+import { formatBRL } from "@/lib/money";
 
 export const metadata = { title: "Contrato" };
 
@@ -32,7 +34,14 @@ export default async function ContractPage({ params }: { params: Params }) {
               {c.issuedAt && ` · versão ${c.version} emitida em ${formatDateTime(c.issuedAt, ctx.timezone)}`}
             </>
           }
-          actions={<ContractActions id={c.id} status={c.status} canIssue={missing.length === 0} />}
+          actions={
+            <ContractActions
+              id={c.id}
+              status={c.status}
+              canIssue={missing.length === 0}
+              signature={{ enabled: zapsignConfigured(), provider: c.signatureProvider, signUrl: c.signUrl, cost: formatBRL(signatureCostCents()), clientEmail: c.sale.client.email, clientPhone: c.sale.client.whatsapp || c.sale.client.phone }}
+            />
+          }
         />
         <div className="mb-4 space-y-3">
           {missing.length > 0 && (
@@ -45,9 +54,21 @@ export default async function ContractPage({ params }: { params: Params }) {
               O conteúdo emitido foi preservado. Se necessário, cancele e reabra o contrato para emitir uma nova versão.
             </Notice>
           )}
+          {c.status === "ENVIADO" && (
+            <Notice title="Aguardando assinatura">
+              Enviado{c.sentAt ? ` em ${formatDateTime(c.sentAt, ctx.timezone)}` : ""}{c.signatureProvider ? ` pela ${c.signatureProvider === "ZAPSIGN" ? "ZapSign" : c.signatureProvider}` : ""}. O status muda para assinado automaticamente quando todos assinarem.
+            </Notice>
+          )}
+          {c.status === "ASSINADO" && (
+            <Notice title="Contrato assinado">
+              Assinado{c.signedAt ? ` em ${formatDateTime(c.signedAt, ctx.timezone)}` : ""}. O PDF assinado fica nos anexos da venda.
+            </Notice>
+          )}
           {c.status === "AGUARDANDO_ENVIO" && (
             <Notice title="Contrato emitido">
-              Use “Imprimir / salvar PDF” para gerar o arquivo. O envio para assinatura eletrônica ficará disponível quando um provedor for configurado.
+              {zapsignConfigured()
+                ? "Envie para assinatura online pela ZapSign ou use “Imprimir / salvar PDF”. O contrato só fica como assinado quando a ZapSign confirmar."
+                : "Use “Imprimir / salvar PDF” para gerar o arquivo. A assinatura online fica disponível quando a ZapSign for configurada na plataforma."}
             </Notice>
           )}
         </div>
