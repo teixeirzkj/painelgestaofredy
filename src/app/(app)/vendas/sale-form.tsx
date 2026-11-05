@@ -30,6 +30,8 @@ import { applyBps, formatBRL, formatPercentBps, splitInstallments, sum } from "@
 import { addMonths } from "@/lib/dates";
 import { COMMERCIAL_MODELS, COMMERCIAL_MODEL_HELP, PAYMENT_METHODS, PRODUCT_TYPES, type CommercialModel } from "@/lib/constants";
 import { cn, formatDocument, newKey } from "@/lib/utils";
+import { AiImport } from "./ai-import";
+import type { SaleExtraction } from "@/server/services/ai-extract";
 
 type Item = {
   uid: string;
@@ -419,6 +421,27 @@ export function SaleForm({
     if (!r.ok) setErrors(issuesToMap(r.issues));
   }
 
+  /** Aplica os dados lidos do print pela IA (só preenche; o vendedor revisa antes de salvar). */
+  function applyExtraction(d: SaleExtraction) {
+    if (d.client.match) setClient(d.client.match);
+    setG((v) => ({
+      ...v,
+      destination: d.destination ?? v.destination,
+      tripStart: d.tripStart ?? v.tripStart,
+      tripEnd: d.tripEnd ?? v.tripEnd,
+      locator: d.locator ?? v.locator,
+      passengerCount: Math.max(d.passengers.length, 1),
+      notes: [v.notes, d.notes ?? ""].filter(Boolean).join("\n"),
+    }));
+    if (d.items.length)
+      setItems(
+        d.items.map((i) =>
+          blankItem({ productType: i.productType, description: i.description, supplierId: i.supplierId ?? "", priceCents: i.priceCents, costCents: i.costCents, locator: i.locator }),
+        ),
+      );
+    if (d.passengers.length) setPassengers(d.passengers.map((p) => ({ uid: newKey(), name: p.name, document: p.document, birthDate: p.birthDate, passportNumber: "", passportExpiry: "" })));
+  }
+
   const err = (k: string) => errors[k];
   const payerOptions = [...(client ? [client] : []), ...people.filter((p) => p.id !== client?.id)];
 
@@ -436,6 +459,7 @@ export function SaleForm({
   return (
     <div className="grid gap-6 pb-24 xl:grid-cols-[1fr_360px]">
       <div className="space-y-6">
+        {isDraft && <AiImport onApply={applyExtraction} />}
         <Section icon={Users} step={1} title="Cliente e viagem" description="Quem compra, para onde e quando.">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="sm:col-span-2 lg:col-span-4">
