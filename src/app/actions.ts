@@ -7,6 +7,8 @@
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
+import * as fredy from "@/server/services/fredy";
 import { prisma } from "@/server/db";
 import { headers } from "next/headers";
 import { createSession, destroySession, getContext, requireContext } from "@/server/auth";
@@ -85,9 +87,14 @@ export async function logoutAction() {
   redirect("/login");
 }
 
+/** Entrega logo após a resposta os eventos gerados (ex.: venda confirmada → card ganho no Frédy). */
+function dispatchSoon(companyId: string) {
+  after(() => automations.dispatchPendingEvents(companyId).catch((e) => console.error("dispatch", e)));
+}
+
 // ------------------------------ Vendas ------------------------------
-export const createSaleAction = async (input: unknown) => act((ctx) => sales.createSale(ctx, input), "Venda registrada.");
-export const updateSaleAction = async (id: string, input: unknown) => act((ctx) => sales.updateSale(ctx, id, input), "Venda atualizada.");
+export const createSaleAction = async (input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.createSale(ctx, input)), "Venda registrada.");
+export const updateSaleAction = async (id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.updateSale(ctx, id, input)), "Venda atualizada.");
 export const cancelSaleAction = async (id: string, reason: string) => act((ctx) => sales.cancelSale(ctx, id, reason), "Venda cancelada.");
 export const duplicateSaleAction = async (id: string) => act((ctx) => sales.duplicateSale(ctx, id), "Venda duplicada como rascunho.");
 export const updateReservationAction = async (id: string, data: { status: string; locator: string | null; notes: string | null }) =>
@@ -112,7 +119,7 @@ export const createReceivableAction = async (input: unknown) => act((ctx) => fin
 export const createPayableAction = async (input: unknown) => act((ctx) => finance.createManualPayable(ctx, input), "Conta a pagar criada.");
 export const updateEntryAction = async (kind: Kind, id: string, input: unknown) => act((ctx) => finance.updateEntry(ctx, kind, id, input), "Lançamento atualizado.");
 export const cancelEntryAction = async (kind: Kind, id: string) => act((ctx) => finance.cancelEntry(ctx, kind, id), "Lançamento cancelado.");
-export const settleEntryAction = async (kind: Kind, id: string, input: unknown) => act((ctx) => finance.settleEntry(ctx, kind, id, input), "Baixa registrada.");
+export const settleEntryAction = async (kind: Kind, id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), finance.settleEntry(ctx, kind, id, input)), "Baixa registrada.");
 export const reverseSettlementAction = async (id: string, reason: string) => act((ctx) => finance.reverseSettlement(ctx, id, reason), "Baixa estornada.");
 export const saveAccountAction = async (id: string | null, input: unknown) => act((ctx) => finance.saveAccount(ctx, id, input), "Conta salva.");
 export const setAccountActiveAction = async (id: string, active: boolean) => act((ctx) => finance.setAccountActive(ctx, id, active), "Conta atualizada.");
@@ -200,3 +207,12 @@ export const saveCardFeeAction = async (id: string | null, input: unknown) => ac
 export const updateCompanyProfileAction = async (input: unknown) => act((ctx) => admin.updateCompanyProfile(ctx, input), "Dados da agência salvos.");
 export const updateMeAction = async (input: unknown) => act((ctx) => admin.updateMe(ctx, input), "Dados atualizados.");
 export const changePasswordAction = async (input: unknown) => act((ctx) => admin.changePassword(ctx, input), "Senha alterada.");
+
+// ------------------------------ Integração Frédy CRM ------------------------------
+export const connectFredyAction = async (token: string) => act((ctx) => fredy.connectFredy(ctx, token), "Frédy conectado.");
+export const listFredyPanelsAction = async () => act((ctx) => fredy.listFredyPanels(ctx));
+export const getFredyPanelSetupAction = async (panelId: string) => act((ctx) => fredy.getFredyPanelSetup(ctx, panelId));
+export const saveFredyMappingAction = async (input: unknown) => act((ctx) => fredy.saveFredyMapping(ctx, input));
+export const testFredyAction = async () => act((ctx) => fredy.testFredyConnection(ctx));
+export const registerFredyWebhookAction = async () => act(async (ctx) => (assertCan(ctx, "settings.manage"), fredy.registerFredyWebhook(ctx.companyId)));
+export const disconnectFredyAction = async () => act((ctx) => fredy.disconnectFredy(ctx), "Frédy desconectado.");

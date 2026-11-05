@@ -4,6 +4,7 @@ import { assertCan, today, type Ctx } from "../context";
 import { addDays, diffDays } from "@/lib/dates";
 import { audit } from "../audit";
 import { AppError } from "../errors";
+import { deliverToFredy, hasActiveFredy } from "./fredy";
 
 /**
  * Automações prontas. Cada automação pode ser ativada/desativada pela agência.
@@ -145,7 +146,7 @@ export async function emitEvent(
 }
 
 // ---------------------------------------------------------------------------
-// Adaptadores de entrega (desacoplados). Nenhuma API do Frédy é presumida.
+// Adaptadores de entrega (desacoplados). O do Frédy usa só endpoints documentados da API WTS.
 // ---------------------------------------------------------------------------
 
 export interface EventDeliveryAdapter {
@@ -178,24 +179,22 @@ export class WebhookAdapter implements EventDeliveryAdapter {
   }
 }
 
-/**
- * Ponto de extensão para a integração nativa com o CRM Frédy. Fica desativado até que
- * a equipe Frédy defina endpoint, autenticação e contrato de dados.
- */
+/** CRM Frédy (API WTS): venda confirmada marca o card como ganho, com valor e nota; pagamento recebido vira nota. */
 export class FredyCrmAdapter implements EventDeliveryAdapter {
   name = "fredy-crm";
+  constructor(private companyId: string, private active: boolean) {}
   isConfigured() {
-    return false; // PENDENTE: integração real não configurada
+    return this.active;
   }
-  async deliver(): Promise<void> {
-    throw new AppError("Integração nativa com o CRM Frédy ainda não configurada.");
+  async deliver(event: { id: string; type: string; payloadJson: string }) {
+    await deliverToFredy(this.companyId, event);
   }
 }
 
 /** Entrega eventos pendentes pelos adaptadores configurados. Eventos sem destino ficam disponíveis na API. */
 export async function dispatchPendingEvents(companyId: string, limit = 50) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
-  const adapters: EventDeliveryAdapter[] = [new WebhookAdapter(company.webhookUrl, company.webhookSecret), new FredyCrmAdapter()].filter(
+  const adapters: EventDeliveryAdapter[] = [new WebhookAdapter(company.webhookUrl, company.webhookSecret), new FredyCrmAdapter(companyId, await hasActiveFredy(companyId))].filter(
     (a) => a.isConfigured(),
   );
   if (adapters.length === 0) return { delivered: 0, failed: 0, skipped: true };

@@ -412,7 +412,7 @@ function emitConfirmed(tx: Tx, ctx: Ctx, saleId: string, code: string, client: {
   });
 }
 
-export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API"; externalRef: string }) {
+export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" | "FREDY"; externalRef: string }) {
   assertCan(ctx, "sales.create");
   const input = saleInputSchema.parse(raw);
   const totals = computeTotals(input);

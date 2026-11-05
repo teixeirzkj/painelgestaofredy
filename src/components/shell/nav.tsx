@@ -51,11 +51,13 @@ import {
   Megaphone,
   UsersRound,
   Layers,
+  Plug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logoutAction } from "@/app/actions";
 
 const ICONS = {
+  Plug,
   LayoutDashboard,
   ShoppingBag,
   Users,
@@ -110,7 +112,12 @@ function isActive(path: string, href: string) {
 
 function Links({ groups, collapsed, onNavigate }: { groups: NavGroup[]; collapsed?: boolean; onNavigate?: () => void }) {
   const path = usePathname();
-  const activeGroup = groups.find((g) => g.items.some((i) => isActive(path, i.href)))?.label;
+  // marca só o item mais específico (ex.: /configuracoes/integracoes não acende também /configuracoes)
+  const best = groups
+    .flatMap((g) => g.items.map((i) => i.href))
+    .filter((h) => isActive(path, h))
+    .sort((a, b) => b.split("?")[0].length - a.split("?")[0].length)[0];
+  const activeGroup = groups.find((g) => g.items.some((i) => i.href === best))?.label;
   const [open, setOpen] = useState<Record<string, boolean>>(() => Object.fromEntries(groups.map((g) => [g.label, g.label === activeGroup || g.items.length === 1])));
   useEffect(() => {
     if (activeGroup) setOpen((o) => ({ ...o, [activeGroup]: true }));
@@ -124,7 +131,7 @@ function Links({ groups, collapsed, onNavigate }: { groups: NavGroup[]; collapse
         const isOpen = collapsed || open[g.label];
         if (single) {
           const i = g.items[0];
-          const active = isActive(path, i.href);
+          const active = i.href === best;
           return (
             <Link
               key={g.label}
@@ -165,7 +172,7 @@ function Links({ groups, collapsed, onNavigate }: { groups: NavGroup[]; collapse
               <div className={cn("flex flex-col gap-0.5", !collapsed && "mb-2 mt-0.5")}>
                 {g.items.map((i) => {
                   const Icon = ICONS[i.icon];
-                  const active = isActive(path, i.href);
+                  const active = i.href === best;
                   return (
                     <Link
                       key={i.href}

@@ -66,6 +66,8 @@ model Company {
   contracts          Contract[]
   automationSettings AutomationSetting[]
   automationEvents   AutomationEvent[]
+  fredyIntegration   FredyIntegration?
+  fredyEvents        FredyWebhookEvent[]
   auditLogs          AuditLog[]
   attachments        Attachment[]
   statementLines     BankStatementLine[]
@@ -908,4 +910,45 @@ model StoredFile {
   createdAt DateTime @default(now())
 
   @@index([companyId])
+}
+
+/// Integração com o CRM Frédy (API WTS) configurada pela própria agência.
+model FredyIntegration {
+  id                    String    @id @default(cuid())
+  companyId             String    @unique
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tokenEnc              String // token pn_... criptografado (AES-256-GCM); nunca volta para o navegador
+  tokenLast4            String
+  status                String    @default("CONECTADA") // CONECTADA | ERRO | DESCONECTADA
+  lastError             String?
+  salesPanelId          String?
+  salesPanelTitle       String?
+  quoteStepId           String? // etapa onde ficam os orçamentos (opcional)
+  wonStepId             String? // etapa "ganho" (além do status WON do card)
+  lostStepId            String?
+  fieldMapJson          String    @default("{}") // { destination, tripStart, tripEnd, passengerCount, productType } -> chave do campo personalizado
+  defaultSellerId       String? // vendedor usado quando o responsável do card não tem login na gestão
+  defaultProductType    String    @default("PACOTE")
+  autoCreateSale        Boolean   @default(true) // card ganho cria venda (rascunho) na gestão
+  syncBack              Boolean   @default(true) // venda confirmada atualiza o card (ganho, valor e nota)
+  webhookKey            String    @unique // segredo na URL do webhook recebido do Frédy
+  webhookSubscriptionId String?
+  connectedAt           DateTime  @default(now())
+  lastEventAt           DateTime?
+  updatedAt             DateTime  @updatedAt
+}
+
+/// Eventos recebidos do Frédy (registro para conferência e idempotência).
+model FredyWebhookEvent {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventType String
+  entityId  String?
+  status    String // PROCESSADO | IGNORADO | ERRO
+  message   String?
+  saleId    String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
 }

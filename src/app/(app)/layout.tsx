@@ -81,6 +81,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         ...when(has("suppliers.view"), { href: "/fornecedores", label: "Fornecedores", icon: "Building2" }),
         ...when(fin, { href: "/configuracoes/categorias", label: "Categorias", icon: "Tags" }),
         ...when(has("settings.manage"), { href: "/configuracoes/taxas-cartao", label: "Taxas de cartão", icon: "CreditCard" }),
+        ...when(has("settings.manage"), { href: "/configuracoes/integracoes", label: "Integrações", icon: "Plug" }),
         ...when(has("automations.manage"), { href: "/automacoes", label: "Automações", icon: "Zap" }),
         ...when(has("settings.manage"), { href: "/configuracoes/acessos", label: "Log de acessos", icon: "ScrollText" }),
       ],
