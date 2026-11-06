@@ -83,6 +83,7 @@ export const PAYABLE_CATEGORIES = labels({
   SISTEMAS: "Sistemas",
   IMPOSTOS: "Impostos",
   ADMINISTRATIVAS: "Despesas administrativas",
+  FATURA_CARTAO: "Fatura do cartão da agência",
   OUTROS: "Outros",
 });
 
@@ -111,6 +112,7 @@ export const ACCOUNT_TYPES = labels({
   BANCO: "Conta bancária",
   CAIXA: "Caixa físico",
   RECEBIVEIS: "Conta de recebíveis",
+  CARTAO_CREDITO: "Cartão de crédito da agência",
   OUTRA: "Outra",
 });
 
@@ -147,7 +149,7 @@ export const EVENT_STATUS = labels({
 });
 
 /** Categorias de repasse: movimentam caixa, mas não entram no resultado (DRE). */
-export const PASS_THROUGH_CATEGORIES = new Set(["REEMBOLSO_CLIENTE", "REEMBOLSO_FORNECEDOR"]);
+export const PASS_THROUGH_CATEGORIES = new Set(["REEMBOLSO_CLIENTE", "REEMBOLSO_FORNECEDOR", "FATURA_CARTAO"]);
 
 export const PERSON_TYPES = labels({ PF: "Pessoa física", PJ: "Pessoa jurídica" });
 
@@ -257,7 +259,7 @@ export const DEFAULT_EXPENSE_CATEGORIES: { group: string; items: { code: string;
     ],
   },
   { group: "Deduções", items: [{ code: "TAXA_CARTAO", name: "Taxas de cartão (maquininha)", system: true }, { code: "DEVOLUCOES", name: "Devoluções e estornos" }] },
-  { group: "Outros", items: [{ code: "OUTROS", name: "Outras despesas" }] },
+  { group: "Outros", items: [{ code: "OUTROS", name: "Outras despesas" }, { code: "FATURA_CARTAO", name: "Fatura do cartão da agência", system: true, inDre: false }] },
 ];
 
 /** Feriados nacionais (fixos e móveis) — usados nos calendários. */

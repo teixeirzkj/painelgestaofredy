@@ -318,7 +318,7 @@ export async function runReport(ctx: Ctx, key: string, p: Period, opts: { compar
       };
     }
     case "fluxo-caixa": {
-      const settlements = await prisma.settlement.findMany({ where: { companyId: ctx.companyId, reversedAt: null, date: { gte: p.from, lte: p.to } } });
+      const settlements = await prisma.settlement.findMany({ where: { companyId: ctx.companyId, reversedAt: null, account: { type: { not: "CARTAO_CREDITO" } }, date: { gte: p.from, lte: p.to } } });
       const rows = monthsBetween(p.from, p.to).map((m) => {
         const ss = settlements.filter((s) => monthKey(s.date) === m);
         const inn = sum(ss.filter((s) => s.kind === "RECEBIMENTO").map((s) => s.amountCents));

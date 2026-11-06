@@ -7,11 +7,13 @@ import { useAction } from "@/components/use-action";
 import { createTransferAction, reverseTransferAction, saveAccountAction, setAccountActiveAction } from "@/app/actions";
 import { ACCOUNT_TYPES } from "@/lib/constants";
 
-type Account = { id: string; name: string; type: string; bankName: string | null; initialBalanceCents: number };
+type Account = { id: string; name: string; type: string; bankName: string | null; initialBalanceCents: number; closingDay?: number | null; dueDay?: number | null };
 
-export function AccountButton({ account }: { account?: Account }) {
+export function AccountButton({ account, defaultType, label }: { account?: Account; defaultType?: string; label?: string }) {
   const [open, setOpen] = useState(false);
-  const [d, setD] = useState({ name: account?.name ?? "", type: account?.type ?? "BANCO", bankName: account?.bankName ?? "", initialBalanceCents: account?.initialBalanceCents ?? 0 });
+  const [d, setD] = useState({ name: account?.name ?? "", type: account?.type ?? defaultType ?? "BANCO", bankName: account?.bankName ?? "", initialBalanceCents: account?.initialBalanceCents ?? 0, closingDay: account?.closingDay ?? null, dueDay: account?.dueDay ?? null });
+  const card = d.type === "CARTAO_CREDITO";
+  const day = (v: string) => (v ? Math.min(Math.max(Number(v), 1), 31) : null);
   const { run, busy } = useAction();
   return (
     <>
@@ -21,7 +23,7 @@ export function AccountButton({ account }: { account?: Account }) {
         </Button>
       ) : (
         <Button size="sm" onClick={() => setOpen(true)}>
-          <Plus className="h-4 w-4" /> Nova conta
+          <Plus className="h-4 w-4" /> {label ?? "Nova conta"}
         </Button>
       )}
       <Modal
@@ -30,14 +32,14 @@ export function AccountButton({ account }: { account?: Account }) {
         title={account ? "Editar conta" : "Nova conta financeira"}
         size="sm"
         footer={
-          <Button loading={busy} onClick={() => run(() => saveAccountAction(account?.id ?? null, d), { onSuccess: () => setOpen(false) })}>
+          <Button loading={busy} onClick={() => run(() => saveAccountAction(account?.id ?? null, card ? { ...d, initialBalanceCents: 0 } : { ...d, closingDay: null, dueDay: null }), { onSuccess: () => setOpen(false) })}>
             Salvar
           </Button>
         }
       >
         <div className="space-y-3">
           <Field label="Nome" required>
-            <Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="Ex.: Sicredi conta corrente" />
+            <Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder={card ? "Ex.: Cartão Itaú final 1234" : "Ex.: Sicredi conta corrente"} />
           </Field>
           <Field label="Tipo">
             <Select value={d.type} onChange={(e) => setD({ ...d, type: e.target.value })}>
@@ -51,9 +53,20 @@ export function AccountButton({ account }: { account?: Account }) {
           <Field label="Banco / instituição">
             <Input value={d.bankName} onChange={(e) => setD({ ...d, bankName: e.target.value })} />
           </Field>
-          <Field label="Saldo inicial" hint="Não pode ser alterado depois que houver movimentação.">
-            <MoneyInput value={d.initialBalanceCents} onChange={(v) => setD({ ...d, initialBalanceCents: v })} />
-          </Field>
+          {card ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Dia de fechamento" required hint="Compras depois deste dia vão para a fatura seguinte">
+                <Input type="number" min={1} max={31} value={d.closingDay ?? ""} onChange={(e) => setD({ ...d, closingDay: day(e.target.value) })} />
+              </Field>
+              <Field label="Dia de vencimento" required>
+                <Input type="number" min={1} max={31} value={d.dueDay ?? ""} onChange={(e) => setD({ ...d, dueDay: day(e.target.value) })} />
+              </Field>
+            </div>
+          ) : (
+            <Field label="Saldo inicial" hint="Não pode ser alterado depois que houver movimentação.">
+              <MoneyInput value={d.initialBalanceCents} onChange={(v) => setD({ ...d, initialBalanceCents: v })} />
+            </Field>
+          )}
         </div>
       </Modal>
     </>

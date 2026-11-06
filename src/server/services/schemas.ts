@@ -209,6 +209,7 @@ export const settlementSchema = z.object({
   accountId: id,
   method: z.enum(PAYMENT_METHODS.values).optional().nullable(),
   notes: optText(500),
+  cardInstallments: z.number().int().min(1).max(24).default(1),
 });
 export type SettlementInput = z.input<typeof settlementSchema>;
 
@@ -217,7 +218,9 @@ export const accountSchema = z.object({
   type: z.enum(ACCOUNT_TYPES.values),
   bankName: optText(80),
   initialBalanceCents: z.number().int().min(-2_000_000_000).max(2_000_000_000).default(0),
-});
+  closingDay: z.number().int().min(1).max(31).nullable().optional(),
+  dueDay: z.number().int().min(1).max(31).nullable().optional(),
+}).refine((a) => a.type !== "CARTAO_CREDITO" || (a.closingDay && a.dueDay), { message: "Informe o dia de fechamento e o dia de vencimento do cartão.", path: ["closingDay"] });
 
 export const transferSchema = z
   .object({

@@ -69,6 +69,7 @@ model Company {
   fredyIntegration   FredyIntegration?
   fredyEvents        FredyWebhookEvent[]
   signatureRequests  SignatureRequest[]
+  mondeIntegration   MondeIntegration?
   auditLogs          AuditLog[]
   attachments        Attachment[]
   statementLines     BankStatementLine[]
@@ -150,6 +151,7 @@ model Client {
   notes            String?
   consentMessaging Boolean   @default(false) // consentimento para comunicações automáticas (LGPD)
   fredyContactId   String? // vínculo futuro com o contato no CRM Frédy
+  mondeId          String? // id da pessoa no Monde (importação)
   ownerId          String?
   owner            User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   createdAt        DateTime  @default(now())
@@ -163,8 +165,10 @@ model Client {
   trips       Trip[]
   credits     ClientCredit[]
   tasks       Task[]
+  attachments Attachment[]
 
   @@unique([companyId, document])
+  @@index([companyId, mondeId])
   @@index([companyId, name])
 }
 
@@ -422,26 +426,28 @@ model Payable {
 
 /// Baixa financeira (recebimento ou pagamento). Nunca é apagada: estornos marcam reversedAt.
 model Settlement {
-  id             String           @id @default(cuid())
-  companyId      String
-  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  kind           String // RECEBIMENTO | PAGAMENTO
-  receivableId   String?
-  receivable     Receivable?      @relation(fields: [receivableId], references: [id], onDelete: Restrict)
-  payableId      String?
-  payable        Payable?         @relation(fields: [payableId], references: [id], onDelete: Restrict)
-  accountId      String
-  account        FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  date           String
-  amountCents    Int // dinheiro movimentado
-  interestCents  Int              @default(0)
-  discountCents  Int              @default(0)
-  method         String?
-  notes          String?
-  createdById    String?
-  reversedAt     DateTime?
-  reversalReason String?
-  createdAt      DateTime         @default(now())
+  id               String           @id @default(cuid())
+  companyId        String
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind             String // RECEBIMENTO | PAGAMENTO
+  receivableId     String?
+  receivable       Receivable?      @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  payableId        String?
+  payable          Payable?         @relation(fields: [payableId], references: [id], onDelete: Restrict)
+  accountId        String
+  account          FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  date             String
+  amountCents      Int // dinheiro movimentado
+  interestCents    Int              @default(0)
+  discountCents    Int              @default(0)
+  method           String?
+  notes            String?
+  createdById      String?
+  reversedAt       DateTime?
+  reversalReason   String?
+  cardInstallments Int              @default(1) // pagamento com cartão da agência: parcelas na fatura
+  cardBillsJson    String? // [{payableId, cents}] faturas do cartão que receberam este pagamento
+  createdAt        DateTime         @default(now())
 
   attachments    Attachment[]
   statementLines BankStatementLine[]
@@ -454,7 +460,9 @@ model FinancialAccount {
   companyId           String
   company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   name                String
-  type                String // BANCO | CAIXA | RECEBIVEIS | OUTRA
+  type                String // BANCO | CAIXA | RECEBIVEIS | CARTAO_CREDITO | OUTRA
+  closingDay          Int? // cartão de crédito da agência: dia de fechamento da fatura
+  dueDay              Int? // cartão de crédito da agência: dia de vencimento da fatura
   bankName            String?
   initialBalanceCents Int      @default(0)
   active              Boolean  @default(true)
@@ -605,7 +613,11 @@ model Attachment {
   trip         Trip?            @relation(fields: [tripId], references: [id], onDelete: SetNull)
   invoiceId    String?
   invoice      SupplierInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  kind         String           @default("COMPROVANTE") // COMPROVANTE | VOUCHER | DOCUMENTO | FATURA | OUTRO
+  clientId     String?
+  client       Client?          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind         String           @default("COMPROVANTE") // COMPROVANTE | VOUCHER | DOCUMENTO | FATURA | OUTRO | documentos do cliente (RG, CPF, CNH, PASSAPORTE...)
+  docNumber    String? // número do documento do cliente (RG, passaporte...)
+  docExpiry    String? // validade do documento do cliente
   fileName     String
   mimeType     String
   sizeBytes    Int
@@ -977,4 +989,24 @@ model PlatformSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+/// Importação de clientes do Monde pela API oficial (https://github.com/monde-sistemas/monde-api).
+model MondeIntegration {
+  id           String    @id @default(cuid())
+  companyId    String    @unique
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  login        String // usuario@agencia.monde.com.br
+  passwordEnc  String // senha criptografada (AES-256-GCM)
+  status       String    @default("CONECTADA") // CONECTADA | ERRO
+  lastError    String?
+  nextPage     Int       @default(1) // próxima página da importação em andamento
+  totalPages   Int?
+  importing    Boolean   @default(false)
+  createdCount Int       @default(0)
+  updatedCount Int       @default(0)
+  skippedCount Int       @default(0)
+  lastImportAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }

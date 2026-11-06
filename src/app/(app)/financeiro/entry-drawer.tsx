@@ -324,8 +324,11 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function SettleForm({ kind, entry, accounts, onDone, onCancel }: { kind: Kind; entry: Entry; accounts: { id: string; name: string }[]; onDone: () => void; onCancel: () => void }) {
-  const [d, setD] = useState({ date: today(), amountCents: entry.balanceCents, interestCents: 0, discountCents: 0, accountId: accounts[0]?.id ?? "", method: entry.method ?? "PIX", notes: "" });
+function SettleForm({ kind, entry, accounts: allAccounts, onDone, onCancel }: { kind: Kind; entry: Entry; accounts: { id: string; name: string; type?: string }[]; onDone: () => void; onCancel: () => void }) {
+  // cartão de crédito da agência só paga contas (fornecedor que só aceita cartão)
+  const accounts = kind === "receivable" ? allAccounts.filter((a) => a.type !== "CARTAO_CREDITO") : allAccounts;
+  const [d, setD] = useState({ date: today(), amountCents: entry.balanceCents, interestCents: 0, discountCents: 0, accountId: accounts[0]?.id ?? "", method: entry.method ?? "PIX", notes: "", cardInstallments: 1 });
+  const isCard = accounts.find((a) => a.id === d.accountId)?.type === "CARTAO_CREDITO";
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { run, busy } = useAction();
   const principal = settlementPrincipalSafe(d.amountCents, d.interestCents, d.discountCents);
@@ -363,20 +366,38 @@ function SettleForm({ kind, entry, accounts, onDone, onCancel }: { kind: Kind; e
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
+                {a.type === "CARTAO_CREDITO" ? " (cartão da agência)" : ""}
               </option>
             ))}
           </Select>
         </Field>
-        <Field label="Forma">
-          <Select value={d.method} onChange={(e) => setD({ ...d, method: e.target.value })}>
-            {PAYMENT_METHODS.values.map((v) => (
-              <option key={v} value={v}>
-                {PAYMENT_METHODS.label(v)}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        {isCard ? (
+          <Field label="Parcelas no cartão" hint="Cada parcela entra na fatura do mês">
+            <Select value={d.cardInstallments} onChange={(e) => setD({ ...d, cardInstallments: Number(e.target.value) })}>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n === 1 ? "À vista" : n + "x"}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : (
+          <Field label="Forma">
+            <Select value={d.method} onChange={(e) => setD({ ...d, method: e.target.value })}>
+              {PAYMENT_METHODS.values.map((v) => (
+                <option key={v} value={v}>
+                  {PAYMENT_METHODS.label(v)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
+      {isCard && (
+        <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          Pago com o cartão da agência: esta conta fica quitada e o valor vai para a <strong>fatura do cartão</strong>, que aparece em Contas a pagar no vencimento do cartão.
+        </p>
+      )}
       <Field label="Observações">
         <Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} />
       </Field>

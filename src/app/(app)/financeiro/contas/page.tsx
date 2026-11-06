@@ -1,6 +1,9 @@
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { listAccounts, listTransfers } from "@/server/services/finance";
+import { listCards } from "@/server/services/cards";
+import Link from "next/link";
+import { CreditCard } from "lucide-react";
 import { Card, CardHeader, Table, Td, Th, Badge } from "@/components/ui";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -11,10 +14,13 @@ export const metadata = { title: "Contas financeiras" };
 
 export default async function AccountsPage() {
   const ctx = await requirePageContext("finance.view");
-  const [accounts, transfers] = await Promise.all([listAccounts(ctx, { includeInactive: true }), listTransfers(ctx)]);
+  const [allAccounts, transfers, cards] = await Promise.all([listAccounts(ctx, { includeInactive: true }), listTransfers(ctx), listCards(ctx)]);
   const canManage = can(ctx, "finance.manage");
+  // cartões da agência têm seção própria: não são saldo em caixa
+  const accounts = allAccounts.filter((a) => a.type !== "CARTAO_CREDITO");
   const active = accounts.filter((a) => a.active);
   return (
+    <div className="space-y-6">
     <div className="grid gap-6 xl:grid-cols-5">
       <Card className="xl:col-span-3">
         <CardHeader title="Contas financeiras" description="Bancos, caixa físico e contas de recebíveis. O saldo considera apenas baixas efetivas e transferências." action={canManage && <AccountButton />} />
@@ -87,6 +93,64 @@ export default async function AccountsPage() {
               </li>
             ))}
           </ul>
+        )}
+      </Card>
+    </div>
+      <Card>
+        <CardHeader
+          title="Cartões de crédito da agência"
+          description="Para fornecedor que só aceita cartão: na baixa da conta a pagar, escolha o cartão. A conta do fornecedor fica quitada e o valor vai para a fatura, que vira uma conta a pagar no vencimento do cartão."
+          action={canManage && <AccountButton defaultType="CARTAO_CREDITO" label="Novo cartão" />}
+        />
+        {cards.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-muted">Nenhum cartão cadastrado. Cadastre o cartão com os dias de fechamento e vencimento da fatura.</p>
+        ) : (
+          <div className="divide-y divide-line">
+            {cards.map((c) => (
+              <div key={c.id} className={`px-5 py-4 ${c.active ? "" : "opacity-50"}`}>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+                    <CreditCard className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{c.name}</p>
+                    <p className="text-xs text-muted">
+                      Fecha dia {c.closingDay ?? "?"} · vence dia {c.dueDay ?? "?"}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-muted">Em aberto nas faturas</p>
+                    <p className="tabular font-semibold">{formatBRL(c.openCents)}</p>
+                  </div>
+                  {canManage && (
+                    <span className="flex gap-1">
+                      <AccountButton account={{ id: c.id, name: c.name, type: "CARTAO_CREDITO", bankName: null, initialBalanceCents: 0, closingDay: c.closingDay, dueDay: c.dueDay }} />
+                      <AccountToggle id={c.id} active={c.active} />
+                    </span>
+                  )}
+                </div>
+                {c.bills.filter((b) => b.openCents > 0).length > 0 && (
+                  <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {c.bills
+                      .filter((b) => b.openCents > 0)
+                      .map((b) => (
+                        <li key={b.id}>
+                          <Link href={`/financeiro/pagar?abrir=${b.id}`} className="block rounded-lg border border-line px-3 py-2 text-sm hover:bg-slate-50">
+                            <span className="flex items-center justify-between gap-2">
+                              <span className="font-medium">{b.description.split(" · ").pop()}</span>
+                              <span className="tabular font-semibold">{formatBRL(b.openCents)}</span>
+                            </span>
+                            <span className="block text-xs text-muted">
+                              vence {formatDate(b.dueDate)} · {b.purchases.length} compra(s)
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </Card>
     </div>

@@ -19,6 +19,7 @@ import { refreshCommissionStatus, saleScope } from "./sales";
 import { refreshInvoiceStatus } from "./invoices";
 import { assertPayableCategory, categoryMap } from "./admin";
 import { textContains, entryDelegate } from "./query";
+import { applyCardCharge, reverseCardCharge, CARD_BILL_CATEGORY } from "./cards";
 import { ATTACHMENT_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 
 export type EntryKind = "receivable" | "payable";
@@ -334,7 +335,7 @@ export async function settleEntryTx(
   ctx: Ctx,
   kind: EntryKind,
   id: string,
-  d: { date: string; amountCents: number; interestCents: number; discountCents: number; accountId: string; method?: string | null; notes?: string | null },
+  d: { date: string; amountCents: number; interestCents: number; discountCents: number; accountId: string; method?: string | null; notes?: string | null; cardInstallments?: number },
   opts: { viaInvoice: boolean },
 ) {
   const principal = settlementPrincipal(d.amountCents, d.interestCents, d.discountCents);
@@ -352,6 +353,10 @@ export async function settleEntryTx(
       throw new AppError(`O valor abatido (${money(principal)}) é maior que o saldo em aberto (${money(balance)}).`);
     const account = await tx.financialAccount.findFirst({ where: { id: d.accountId, companyId: ctx.companyId, active: true } });
     if (!account) throw new AppError("Conta financeira inválida.");
+    const isCard = account.type === "CARTAO_CREDITO";
+    if (isCard && kind === "receivable") throw new AppError("O cartão de crédito da agência só serve para pagar contas. Escolha uma conta bancária ou o caixa.");
+    if (isCard && "category" in e && e.category === CARD_BILL_CATEGORY) throw new AppError("A fatura do cartão é paga por uma conta bancária, não pelo próprio cartão.");
+    const cardInstallments = isCard ? Math.min(Math.max(d.cardInstallments ?? 1, 1), 24) : 1;
 
     const s = await tx.settlement.create({
       data: {
@@ -363,11 +368,13 @@ export async function settleEntryTx(
         amountCents: d.amountCents,
         interestCents: d.interestCents,
         discountCents: d.discountCents,
-        method: d.method ?? null,
+        method: isCard ? "CARTAO_CREDITO" : (d.method ?? null),
         notes: d.notes,
         createdById: ctx.userId,
+        cardInstallments,
       },
     });
+    if (isCard) await applyCardCharge(tx, ctx, account, s, ("description" in e ? String(e.description) : "Pagamento").slice(0, 120));
     const after = await recomputeEntry(tx, kind, id);
     await afterSettlementChange(tx, ctx, kind, id, s.id, "baixa");
     await audit(tx, ctx, kind === "receivable" ? "receber.baixa" : "pagar.baixa", kind === "receivable" ? "Receivable" : "Payable", id, {
@@ -387,6 +394,7 @@ export async function reverseSettlement(ctx: Ctx, settlementId: string, reason: 
     const s = await tx.settlement.findFirst({ where: { id: settlementId, companyId: ctx.companyId } });
     if (!s) throw new AppError("Baixa não encontrada.", "NOT_FOUND");
     if (s.reversedAt) throw new AppError("Esta baixa já foi estornada.");
+    await reverseCardCharge(tx, s);
     await tx.settlement.update({ where: { id: s.id }, data: { reversedAt: new Date(), reversalReason: reason.trim() } });
     await tx.bankStatementLine.updateMany({ where: { settlementId: s.id }, data: { status: "PENDENTE", settlementId: null } });
     const kind: EntryKind = s.receivableId ? "receivable" : "payable";
@@ -556,7 +564,7 @@ export async function cashflow(
   const { from, to, granularity: g, accountId, category } = opts;
   const t = today(ctx);
 
-  const accounts = await prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, ...(accountId ? { id: accountId } : {}) } });
+  const accounts = await prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, ...(accountId ? { id: accountId } : { type: { not: "CARTAO_CREDITO" } }) } });
   if (accountId && accounts.length === 0) throw new AppError("Conta inválida.");
   const accIds = accounts.map((a) => a.id);
   const initial = sum(accounts.map((a) => a.initialBalanceCents));
@@ -570,7 +578,8 @@ export async function cashflow(
     companyId: ctx.companyId,
     reversedAt: null,
     date: { gte: from, lte: to },
-    ...(accountId ? { accountId } : {}),
+    // compras no cartão da agência não saem do caixa: quem sai é a fatura do cartão (conta a pagar)
+    ...(accountId ? { accountId } : { account: { type: { not: "CARTAO_CREDITO" } } }),
     ...(category ? { OR: [{ receivable: { category } }, { payable: { category } }] } : {}),
   };
   const [settlements, openRec, openPay, transfers] = await Promise.all([
@@ -720,7 +729,7 @@ export async function getAttachment(ctx: Ctx, id: string) {
 
 export async function financeOptions(ctx: Ctx) {
   const [accounts, clients, suppliers, costCenters, cats] = await Promise.all([
-    prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true, type: true }, orderBy: { name: "asc" } }),
     prisma.client.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" }, take: 500 }),
     prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.costCenter.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
