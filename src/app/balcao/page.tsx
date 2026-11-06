@@ -10,7 +10,10 @@ import { formatDocument, onlyDigits } from "@/lib/utils";
 import { str, type SearchParams } from "@/lib/params";
 import { EditClientButton } from "@/app/(app)/clientes/client-buttons";
 import { ClientDocuments } from "@/app/(app)/clientes/[id]/client-documents";
-import { balcaoContext, carry } from "./shared";
+import { saleScope } from "@/server/services/sales";
+import { formatBRL } from "@/lib/money";
+import { balcaoContext, carry, clientMissing, flowKeyFor } from "./shared";
+import { BalcaoGuide, GatedContinue, type GuideFacts } from "./guide";
 import { ClientPicker } from "./client-picker";
 
 /**
@@ -75,8 +78,35 @@ export default async function BalcaoClientePage({ searchParams }: { searchParams
   }
 
   const canManage = can(ctx, "clients.manage");
+  const flowKey = flowKeyFor(prefill ? card : null);
+  const missing = selected ? clientMissing(selected) : [];
+  const guide: GuideFacts = {
+    page: "cliente",
+    flowKey,
+    cardTitle: prefill?.title ?? null,
+    clientChosen: !!selected,
+    clientComplete: !!selected && missing.length === 0,
+    clientMissing: missing,
+    docs: selected?.attachments.length ?? 0,
+    saleExists: false,
+    saleConfirmed: false,
+    contractStatus: null,
+    canContract: can(ctx, "contracts.manage"),
+    attachments: 0,
+  };
+  // rascunhos do cliente (ex.: o que chegou do Frédy quando o card virou ganho): continuar por eles evita venda duplicada
+  const drafts = selected
+    ? await prisma.sale.findMany({
+        where: { ...saleScope(ctx), clientId: selected.id, status: "ORCAMENTO" },
+        select: { id: true, code: true, destination: true, origin: true, externalRef: true, grossCents: true },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      })
+    : [];
+  const continueCls = "inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700";
   return (
     <div className="space-y-5">
+      <BalcaoGuide facts={guide} />
       {cardError && <Notice tone="amber" title="Card do Frédy">{cardError} Você pode continuar normalmente: a venda só não ficará ligada ao card.</Notice>}
       {prefill && (
         <Notice title={`Card do Frédy: ${prefill.title}`}>
@@ -117,10 +147,26 @@ export default async function BalcaoClientePage({ searchParams }: { searchParams
             <CardHeader title="Documentos do cliente" description="Fotos do RG, CPF, CNH ou passaporte. No celular, o botão da câmera tira a foto na hora." />
             <ClientDocuments clientId={selected.id} docs={selected.attachments} canManage={canManage} todayStr={today(ctx)} />
           </Card>
+          {drafts.length > 0 && (
+            <Notice tone="amber" title="Este cliente já tem venda em rascunho">
+              <p>Se é esta venda, continue por ela em vez de lançar outra (a venda que chega do Frédy quando o card vira ganho fica aqui).</p>
+              <ul className="mt-2 space-y-1">
+                {drafts.map((d) => (
+                  <li key={d.id}>
+                    <Link href={`/balcao/${d.id}/editar`} className="font-medium underline">
+                      Continuar {d.code}
+                    </Link>{" "}
+                    · {d.destination ?? "sem destino"} · <span className="tabular">{formatBRL(d.grossCents)}</span>
+                    {d.externalRef?.startsWith("fredy:") && " · veio do Frédy"}
+                  </li>
+                ))}
+              </ul>
+            </Notice>
+          )}
           <div className="flex justify-end">
-            <Link href={`/balcao/venda${carry(card, { cliente: selected.id })}`} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700">
+            <GatedContinue flowKey={flowKey} href={`/balcao/venda${carry(card, { cliente: selected.id })}`} className={continueCls}>
               Continuar: lançar a venda <ArrowRight className="h-4 w-4" />
-            </Link>
+            </GatedContinue>
           </div>
         </>
       ) : (

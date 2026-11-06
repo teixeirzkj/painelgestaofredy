@@ -14,7 +14,8 @@ import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { AppError } from "@/server/errors";
 import type { Params } from "@/lib/params";
-import { balcaoContext } from "../shared";
+import { balcaoContext, saleGuideFacts } from "../shared";
+import { BalcaoGuide } from "../guide";
 
 /** Etapa 3 da venda rápida: contrato (atualizar, emitir, enviar) e documentos/vouchers da venda. */
 export default async function BalcaoVendaFeitaPage({ params }: { params: Params }) {
@@ -35,10 +36,12 @@ export default async function BalcaoVendaFeitaPage({ params }: { params: Params 
   const draft = sale.status === "ORCAMENTO";
   const phone = (sale.client.whatsapp || sale.client.phone || "").replace(/\D/g, "");
   const wa = phone ? (phone.length <= 11 ? "55" + phone : phone) : null;
+  const guide = await saleGuideFacts(ctx, sale.id, "final");
   const firstName = sale.client.name.split(/\s+/)[0];
 
   return (
     <div className="space-y-5">
+      {guide && <BalcaoGuide facts={guide} />}
       <Card>
         <div className="flex flex-wrap items-center gap-3 px-5 py-4">
           <div className="min-w-0 flex-1">
