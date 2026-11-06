@@ -34,7 +34,7 @@ No ar em https://painelgestaofredy.vercel.app (GitHub teixeirzkj/painelgestaofre
    - `CRON_SECRET`: 32 ou mais caracteres aleatórios.
    - `PLATFORM_BOOTSTRAP_EMAIL` e `PLATFORM_BOOTSTRAP_PASSWORD`: o seu acesso ao painel da plataforma.
 5. [x] **(você)** Fazer o deploy. O build roda as migrações e cria as tabelas.
-6. [ ] **(você/eu)** Primeiro acesso:
+6. [x] **(você/eu)** Primeiro acesso:
    - Entre em `https://<projeto>.vercel.app/plataforma/login` com o e-mail e a senha do passo 4.
    - Crie a agência da cliente com o login do administrador dela.
    - Remova as variáveis `PLATFORM_BOOTSTRAP_*`.
@@ -56,7 +56,7 @@ No ar em https://painelgestaofredy.vercel.app (GitHub teixeirzkj/painelgestaofre
 - [x] **(eu)** **Card ganho → venda**: card do painel de vendas marcado como ganho (ou movido para a etapa de ganho) cria a venda em rascunho, com o cliente vinculado ao contato do Frédy, o valor e os dados do card. Nunca duplica. Card ganho sem valor recebe uma nota pedindo o valor e a venda é criada quando ele for preenchido.
 - [x] **(eu)** **Contatos**: contato atualizado no Frédy atualiza nome, e-mail e WhatsApp do cliente vinculado.
 - [x] **(eu)** **Gestão → Frédy**: venda confirmada marca o card como ganho, com o valor final e uma nota com o código e o link da venda; pagamento recebido vira nota no card.
-- [ ] **(você)** Gerar o token em *Frédy → Ajustes → Integrações → Integração via API → Novo* e colar em *Configurações → Integrações* da agência.
+- [x] **(você)** Gerar o token em *Frédy → Ajustes → Integrações → Integração via API → Novo* e colar em *Configurações → Integrações* da agência.
 - [ ] **(você/eu)** Teste ponta a ponta com um card real de teste.
 - [ ] **(você)** Aprovar no WhatsApp os modelos de mensagem. **(eu)** escrevo os textos e faço o disparo pelo Frédy respeitando o consentimento (LGPD): pagamento recebido, lembrete de parcela, contrato para assinatura, pré-viagem, pós-viagem.
 

@@ -105,7 +105,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                         key={c.key}
                         title={undefined}
                         align={c.type === "text" || c.type === "date" ? "left" : "right"}
-                        className={cn(c.key === "line" && "whitespace-pre", c.key === "amount" && Number(row[c.key]) < 0 && "text-danger", c.key === "delta" && Number(row[c.key]) < 0 && "text-danger", c.key === "delta" && Number(row[c.key]) > 0 && "text-success")}
+                        className={cn(c.key === "line" && "whitespace-pre", (c.type !== "text" || c.key === "code") && "whitespace-nowrap", c.key === "amount" && Number(row[c.key]) < 0 && "text-danger", c.key === "delta" && Number(row[c.key]) < 0 && "text-danger", c.key === "delta" && Number(row[c.key]) > 0 && "text-success")}
                       >
                         {fmt(row[c.key], c.type)}
                       </Td>
