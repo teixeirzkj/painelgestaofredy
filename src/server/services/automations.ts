@@ -80,13 +80,38 @@ export const AUTOMATIONS = [
   {
     key: "viagem_concluida.evento",
     group: "Viagem concluída",
-    title: "Pós-venda e pesquisa de satisfação",
-    description: "Marca a venda como concluída após o retorno e publica viagem.concluida.",
+    title: "Pós-venda e pedido de feedback",
+    description: "No dia seguinte ao retorno, marca a venda como concluída e publica viagem.concluida (use no n8n para pedir avaliação e feedback).",
     core: false,
     defaultEnabled: false,
     eventType: "viagem.concluida",
   },
+  {
+    key: "checkin_lembrete.evento",
+    group: "Lembrete de check-in",
+    title: "Lembrete de check-in (1 dia antes do embarque)",
+    description: "Publica viagem.checkin na véspera do embarque, com destino, data e localizador (use no n8n para lembrar o cliente de fazer o check-in).",
+    core: false,
+    defaultEnabled: false,
+    eventType: "viagem.checkin",
+  },
+  {
+    key: "cliente_aniversario.evento",
+    group: "Aniversário do cliente",
+    title: "Mensagem de aniversário",
+    description: "Publica cliente.aniversario no dia do aniversário de cada cliente ativo (use no n8n para enviar a mensagem de parabéns).",
+    core: false,
+    defaultEnabled: false,
+    eventType: "cliente.aniversario",
+  },
 ] as const;
+
+/** Dados do cliente para quem envia a mensagem (n8n, CRM). Telefone com DDI 55 quando vier sem. */
+export function clientContact(c: { id: string; name: string; whatsapp: string | null; phone: string | null; email: string | null; fredyContactId: string | null; consentMessaging: boolean }) {
+  const digits = (c.whatsapp || c.phone || "").replace(/\D/g, "");
+  const whatsapp = digits ? (digits.length <= 11 ? "55" + digits : digits) : null;
+  return { id: c.id, name: c.name, firstName: c.name.split(/\s+/)[0], whatsapp, email: c.email, fredyContactId: c.fredyContactId };
+}
 
 export type AutomationKey = (typeof AUTOMATIONS)[number]["key"];
 
@@ -231,7 +256,7 @@ export async function dispatchPendingEvents(companyId: string, limit = 50) {
 export async function runScheduledAutomations(companyId: string, todayStr?: string) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
   const t = todayStr ?? today(company);
-  const result = { vencendo: 0, viagemProxima: 0, concluidas: 0 };
+  const result = { vencendo: 0, viagemProxima: 0, concluidas: 0, checkin: 0, aniversarios: 0 };
 
   await prisma.$transaction(async (tx) => {
     // Pagamentos próximos do vencimento
@@ -242,7 +267,7 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
           status: { in: ["PENDENTE", "PARCIAL"] },
           dueDate: { gte: t, lte: addDays(t, company.upcomingDueDays) },
         },
-        include: { client: true, sale: { select: { code: true } } },
+        include: { client: true, sale: { select: { code: true, seller: { select: { name: true } } } } },
       });
       for (const r of due) {
         const created = await emitEvent(tx, companyId, "pagamento_vencendo.evento", {
@@ -255,7 +280,9 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
             saleCode: r.sale?.code ?? null,
             dueDate: r.dueDate,
             balanceCents: r.amountCents - r.settledCents,
-            client: r.client ? { id: r.client.id, name: r.client.name, fredyContactId: r.client.fredyContactId } : null,
+            sellerName: r.sale?.seller?.name ?? null,
+            agencyName: company.tradeName || company.name,
+            client: r.client ? clientContact(r.client) : null,
             messagingAllowed: !!r.client?.consentMessaging,
           },
         });
@@ -267,7 +294,7 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
     if (await isAutomationEnabled(tx, companyId, "viagem_proxima.evento")) {
       const trips = await tx.sale.findMany({
         where: { companyId, status: "CONFIRMADA", tripStart: { gte: t, lte: addDays(t, company.upcomingTripDays) } },
-        include: { client: true },
+        include: { client: true, seller: { select: { name: true } } },
       });
       for (const s of trips) {
         const created = await emitEvent(tx, companyId, "viagem_proxima.evento", {
@@ -281,7 +308,10 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
             destination: s.destination,
             tripStart: s.tripStart,
             daysToTrip: diffDays(s.tripStart!, t),
-            client: { id: s.client.id, name: s.client.name, fredyContactId: s.client.fredyContactId },
+            locator: s.locator,
+            sellerName: s.seller?.name ?? null,
+            agencyName: company.tradeName || company.name,
+            client: clientContact(s.client),
             messagingAllowed: s.client.consentMessaging,
           },
         });
@@ -293,7 +323,7 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
     if (await isAutomationEnabled(tx, companyId, "viagem_concluida.evento")) {
       const done = await tx.sale.findMany({
         where: { companyId, status: "CONFIRMADA", tripEnd: { lt: t } },
-        include: { client: true },
+        include: { client: true, seller: { select: { name: true } } },
       });
       for (const s of done) {
         await tx.sale.update({ where: { id: s.id }, data: { status: "CONCLUIDA" } });
@@ -307,7 +337,9 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
             saleCode: s.code,
             destination: s.destination,
             tripEnd: s.tripEnd,
-            client: { id: s.client.id, name: s.client.name, fredyContactId: s.client.fredyContactId },
+            sellerName: s.seller?.name ?? null,
+            agencyName: company.tradeName || company.name,
+            client: clientContact(s.client),
             messagingAllowed: s.client.consentMessaging,
           },
         });
@@ -315,6 +347,64 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
       }
     }
   });
+  // Lembrete de check-in: vendas com embarque amanhã
+  await prisma.$transaction(async (tx) => {
+    if (!(await isAutomationEnabled(tx, companyId, "checkin_lembrete.evento"))) return;
+    const tomorrow = addDays(t, 1);
+    const sales = await tx.sale.findMany({
+      where: { companyId, status: "CONFIRMADA", tripStart: tomorrow },
+      include: { client: true, seller: { select: { name: true } }, items: { select: { productType: true, locator: true, description: true } } },
+    });
+    for (const s of sales) {
+      const created = await emitEvent(tx, companyId, "checkin_lembrete.evento", {
+        type: "viagem.checkin",
+        entityType: "Sale",
+        entityId: s.id,
+        idempotencyKey: `viagem.checkin:${s.id}:${s.tripStart}`,
+        payload: {
+          saleId: s.id,
+          saleCode: s.code,
+          destination: s.destination,
+          tripStart: s.tripStart,
+          tripEnd: s.tripEnd,
+          locator: s.locator,
+          hasFlight: s.items.some((i) => i.productType === "AEREO"),
+          items: s.items.map((i) => ({ productType: i.productType, description: i.description, locator: i.locator })),
+          sellerName: s.seller?.name ?? null,
+          agencyName: company.tradeName || company.name,
+          client: clientContact(s.client),
+          messagingAllowed: s.client.consentMessaging,
+        },
+      });
+      if (created) result.checkin++;
+    }
+  });
+
+  // Aniversário: clientes ativos que fazem aniversário hoje (uma vez por ano)
+  await prisma.$transaction(async (tx) => {
+    if (!(await isAutomationEnabled(tx, companyId, "cliente_aniversario.evento"))) return;
+    const mmdd = t.slice(5);
+    const candidates = await tx.client.findMany({ where: { companyId, archivedAt: null, birthDate: { endsWith: mmdd } } });
+    // 29/02 comemora em 28/02 nos anos não bissextos
+    const leap = mmdd === "02-28" && !isLeapYear(Number(t.slice(0, 4))) ? await tx.client.findMany({ where: { companyId, archivedAt: null, birthDate: { endsWith: "02-29" } } }) : [];
+    for (const c of [...candidates, ...leap]) {
+      const created = await emitEvent(tx, companyId, "cliente_aniversario.evento", {
+        type: "cliente.aniversario",
+        entityType: "Client",
+        entityId: c.id,
+        idempotencyKey: `cliente.aniversario:${c.id}:${t.slice(0, 4)}`,
+        payload: {
+          birthDate: c.birthDate,
+          age: Number(t.slice(0, 4)) - Number(c.birthDate!.slice(0, 4)),
+          agencyName: company.tradeName || company.name,
+          client: clientContact(c),
+          messagingAllowed: c.consentMessaging,
+        },
+      });
+      if (created) result.aniversarios++;
+    }
+  });
+
   const dispatch = await dispatchPendingEvents(companyId);
   return { ...result, dispatch };
 }
@@ -328,4 +418,32 @@ export async function listEvents(ctx: Ctx, opts: { page?: number; type?: string 
     prisma.automationEvent.count({ where }),
   ]);
   return { items, total, page, pages: Math.max(1, Math.ceil(total / 25)) };
+}
+
+function isLeapYear(y: number) {
+  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+}
+
+/** Envia um evento de exemplo ao webhook da agência (para montar o fluxo no n8n). Não grava nada. */
+export async function sendTestWebhook(ctx: Ctx) {
+  assertCan(ctx, "settings.manage");
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: ctx.companyId } });
+  if (!company.webhookUrl) throw new AppError("Salve a URL do webhook antes de testar.");
+  const payloadJson = JSON.stringify({
+    type: "cliente.aniversario",
+    occurredAt: new Date().toISOString(),
+    test: true,
+    data: {
+      birthDate: "1990-04-02",
+      age: 36,
+      agencyName: company.tradeName || company.name,
+      client: { id: "exemplo", name: "Maria Exemplo da Silva", firstName: "Maria", whatsapp: "5542999990000", email: "maria@exemplo.com", fredyContactId: null },
+      messagingAllowed: true,
+    },
+  });
+  try {
+    await new WebhookAdapter(company.webhookUrl, company.webhookSecret).deliver({ id: "teste", type: "cliente.aniversario", payloadJson });
+  } catch (e) {
+    throw new AppError(`O webhook não aceitou o evento de teste (${(e as Error).message}). Confira a URL e se o fluxo do n8n está ativo.`);
+  }
 }

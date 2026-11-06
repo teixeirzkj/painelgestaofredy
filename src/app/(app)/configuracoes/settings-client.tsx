@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button, Card, CardHeader, Field, Input, Select, Notice } from "@/components/ui";
 import { Modal, PasswordInput } from "@/components/ui/client";
 import { useAction, issuesToMap } from "@/components/use-action";
-import { rotateApiKeyAction, saveUserAction, setRolePermissionAction, updateCompanyAction } from "@/app/actions";
+import { rotateApiKeyAction, saveUserAction, sendTestWebhookAction, setRolePermissionAction, updateCompanyAction } from "@/app/actions";
 import { ROLES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
@@ -73,7 +73,13 @@ export function IntegrationsForm({ hasApiKey, webhookUrl, hasSecret, base }: { h
           <Field label="Segredo para assinatura HMAC" hint="Enviado como X-Fredy-Signature (SHA-256 do corpo).">
             <PasswordInput value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
           </Field>
-          <div className="flex justify-end">
+          <p className="rounded-lg bg-slate-50 p-3 text-xs text-muted">
+            Eventos enviados: venda.confirmada, pagamento.identificado, pagamento.vencendo, viagem.proxima, viagem.checkin, viagem.concluida (feedback), cliente.aniversario e contrato.assinado. Cada um traz o cliente com nome, primeiro nome, WhatsApp (com 55), e-mail e o campo messagingAllowed (consentimento LGPD): só envie mensagem quando ele for true. Ative cada um em Automações.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" loading={busy} disabled={!url} onClick={() => run(() => sendTestWebhookAction())}>
+              Enviar evento de teste
+            </Button>
             <Button loading={busy} onClick={() => run(() => updateCompanyAction({ ...base, webhookUrl: url, webhookSecret: secret }))}>
               Salvar webhook
             </Button>

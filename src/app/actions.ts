@@ -233,3 +233,4 @@ export const connectMondeAction = async (input: { login: string; password: strin
 export const disconnectMondeAction = async () => act((ctx) => monde.disconnectMonde(ctx), "Monde desconectado.");
 export const restartMondeImportAction = async () => act((ctx) => monde.restartMondeImport(ctx));
 export const importMondeBatchAction = async () => act((ctx) => monde.importMondeBatch(ctx));
+export const sendTestWebhookAction = async () => act((ctx) => automations.sendTestWebhook(ctx), "Evento de teste enviado ao webhook.");
