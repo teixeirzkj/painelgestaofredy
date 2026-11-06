@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Badge, Button, Card, Field, Input, Select, Textarea } from "@/components/ui";
 import { useAction } from "@/components/use-action";
-import { saveTemplateAction } from "@/app/actions";
+import { saveTemplateAction, createSuggestedTemplatesAction } from "@/app/actions";
 import { PRODUCT_TYPES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,7 @@ export function TemplatesEditor({ templates, variables }: { templates: T[]; vari
   const [list, setList] = useState(templates);
   const [sel, setSel] = useState<T | null>(templates[0] ?? null);
   const { run, busy } = useAction();
+  const router = useRouter();
 
   const blank: T = { id: null, name: "Novo modelo", productType: "OUTROS", body: "CONTRATO DE PRESTAÇÃO DE SERVIÇOS\n\nCONTRATANTE: {{cliente.nome}}, CPF/CNPJ {{cliente.documento}}\n\n{{clausulas}}", clauses: "", active: true, version: 0 };
 
@@ -73,6 +75,14 @@ export function TemplatesEditor({ templates, variables }: { templates: T[]; vari
               Salvar modelo
             </Button>
           </div>
+        </Card>
+      ) : list.length === 0 ? (
+        <Card className="space-y-3 p-8 text-center">
+          <p className="font-medium text-ink">Nenhum modelo de contrato ainda</p>
+          <p className="text-sm text-muted">Sem modelo, o contrato das vendas fica como "não gerado". Carregue os 5 modelos sugeridos (pacote, aéreo, hospedagem, cruzeiro e outros) e revise o texto com o jurídico da agência.</p>
+          <Button loading={busy} onClick={() => run(() => createSuggestedTemplatesAction(), { onSuccess: () => router.refresh() })}>
+            <Sparkles className="h-4 w-4" /> Carregar modelos sugeridos
+          </Button>
         </Card>
       ) : (
         <Card className="p-8 text-center text-sm text-muted">Selecione ou crie um modelo.</Card>

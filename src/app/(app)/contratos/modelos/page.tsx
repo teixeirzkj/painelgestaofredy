@@ -12,6 +12,7 @@ export default async function TemplatesPage() {
     <>
       <PageHeader title="Modelos de contrato" description="Um modelo por tipo de produto, com cláusulas específicas de cancelamento e alteração." back={{ href: "/contratos", label: "Contratos" }} />
       <TemplatesEditor
+        key={templates.length}
         templates={templates.map((t) => ({ id: t.id, name: t.name, productType: t.productType, body: t.body, clauses: t.clauses, active: t.active, version: t.version }))}
         variables={CONTRACT_VARIABLES}
       />

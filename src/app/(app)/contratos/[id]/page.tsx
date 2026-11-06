@@ -46,7 +46,17 @@ export default async function ContractPage({ params }: { params: Params }) {
         <div className="mb-4 space-y-3">
           {missing.length > 0 && (
             <Notice tone="amber" title="Dados obrigatórios pendentes">
-              Complete no cadastro do cliente ou na venda e clique em “Atualizar prévia”: {missing.join(", ")}.
+              {missing.includes("Modelo de contrato para o produto") ? (
+                <>
+                  A agência ainda não tem modelo de contrato para este produto.{" "}
+                  <Link href="/contratos/modelos" className="font-medium underline">
+                    Cadastre ou carregue os modelos sugeridos
+                  </Link>{" "}
+                  e depois clique em “Atualizar prévia”.
+                </>
+              ) : (
+                <>Complete no cadastro do cliente ou na venda e clique em “Atualizar prévia”: {missing.join(", ")}.</>
+              )}
             </Notice>
           )}
           {c.outdated && (

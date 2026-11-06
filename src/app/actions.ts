@@ -136,6 +136,7 @@ export const issueContractAction = async (id: string) => act((ctx) => contracts.
 export const cancelContractAction = async (id: string) => act((ctx) => contracts.cancelContract(ctx, id), "Contrato cancelado.");
 export const reopenContractAction = async (id: string) => act((ctx) => contracts.reopenContract(ctx, id), "Contrato reaberto para nova versão.");
 export const saveTemplateAction = async (id: string | null, input: unknown) => act((ctx) => contracts.saveTemplate(ctx, id, input), "Modelo salvo.");
+export const createSuggestedTemplatesAction = async () => act((ctx) => contracts.createSuggestedTemplates(ctx), "Modelos sugeridos criados. Revise o texto com o jurídico da agência.");
 export const prepareContractAction = async (saleId: string) =>
   act(async (ctx) => {
     assertCan(ctx, "contracts.manage");

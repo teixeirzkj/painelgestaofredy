@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/dates";
 import { PAYMENT_METHODS, PRODUCT_TYPES } from "@/lib/constants";
 import { formatDocument } from "@/lib/utils";
 import { PRODUCT_TYPES as PT } from "@/lib/constants";
+import { SUGGESTED_TEMPLATES, SUGGESTED_TEMPLATE_BODY } from "./contract-defaults";
 
 /** Variáveis disponíveis nos modelos de contrato. */
 export const CONTRACT_VARIABLES: { key: string; label: string; required?: boolean }[] = [
@@ -289,5 +290,22 @@ export async function saveTemplate(ctx: Ctx, id: string | null, raw: unknown) {
     const created = await tx.contractTemplate.create({ data: { ...data, companyId: ctx.companyId } });
     await audit(tx, ctx, "modelo_contrato.criado", "ContractTemplate", created.id);
     return created;
+  });
+}
+
+/**
+ * Agência nova sem modelos: cria os modelos sugeridos (rascunhos para revisão jurídica)
+ * e atualiza os contratos que estavam parados por falta de modelo.
+ */
+export async function createSuggestedTemplates(ctx: Ctx) {
+  assertCan(ctx, "settings.manage");
+  return prisma.$transaction(async (tx) => {
+    if (await tx.contractTemplate.count({ where: { companyId: ctx.companyId } }))
+      throw new AppError("A agência já tem modelos de contrato. Edite os existentes ou crie um novo.", "CONFLICT");
+    for (const t of SUGGESTED_TEMPLATES) await tx.contractTemplate.create({ data: { companyId: ctx.companyId, name: t.name, productType: t.productType, body: SUGGESTED_TEMPLATE_BODY, clauses: t.clauses } });
+    await audit(tx, ctx, "modelo_contrato.sugeridos_criados", "ContractTemplate", null, { quantidade: SUGGESTED_TEMPLATES.length });
+    const stuck = await tx.contract.findMany({ where: { companyId: ctx.companyId, status: "NAO_GERADO" }, select: { saleId: true } });
+    for (const c of stuck) await prepareContractForSale(tx, ctx.companyId, c.saleId);
+    return { created: SUGGESTED_TEMPLATES.length, refreshed: stuck.length };
   });
 }
