@@ -10,6 +10,8 @@ import { formatDate } from "@/lib/dates";
 import { maskDocument } from "@/lib/utils";
 import { int, str, withParams, type SearchParams } from "@/lib/params";
 import { NewClientButton } from "./client-buttons";
+import { ImportClientsButton } from "./import-clients";
+import { getMonde } from "@/server/services/monde";
 
 export const metadata = { title: "Clientes" };
 
@@ -24,7 +26,14 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
       <PageHeader
         title="Clientes"
         description={can(ctx, "clients.view_all") ? "Clientes pessoa física e jurídica, com histórico de compras, viagens e pendências." : "Clientes atendidos por você."}
-        actions={can(ctx, "clients.manage") && <NewClientButton />}
+        actions={
+          can(ctx, "clients.manage") && (
+            <>
+              <ImportClientsButton monde={can(ctx, "settings.manage") ? await getMonde(ctx) : null} canMonde={can(ctx, "settings.manage")} />
+              <NewClientButton />
+            </>
+          )
+        }
       />
       <Card>
         <div className="border-b border-line px-4 py-3">

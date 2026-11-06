@@ -79,7 +79,10 @@ export async function searchClients(ctx: Ctx, q: string) {
 }
 
 export async function getClient(ctx: Ctx, id: string) {
-  const client = await prisma.client.findFirst({ where: { AND: [{ id }, clientScope(ctx)] }, include: { owner: { select: { name: true } } } });
+  const client = await prisma.client.findFirst({
+    where: { AND: [{ id }, clientScope(ctx)] },
+    include: { owner: { select: { name: true } }, attachments: { orderBy: { createdAt: "desc" }, select: { id: true, kind: true, fileName: true, mimeType: true, sizeBytes: true, docNumber: true, docExpiry: true, createdAt: true } } },
+  });
   if (!client) throw new AppError("Cliente não encontrado.", "NOT_FOUND");
   const t = today(ctx);
   const [sales, receivables, contracts, trips, asPassenger] = await Promise.all([

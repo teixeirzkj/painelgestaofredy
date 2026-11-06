@@ -20,6 +20,8 @@ import * as ops from "@/server/services/ops";
 import { toResult, AppError, type ActionResult } from "@/server/errors";
 import * as sales from "@/server/services/sales";
 import * as finance from "@/server/services/finance";
+import * as clientImport from "@/server/services/client-import";
+import * as monde from "@/server/services/monde";
 import * as registry from "@/server/services/registry";
 import * as contracts from "@/server/services/contracts";
 import * as automations from "@/server/services/automations";
@@ -137,6 +139,7 @@ export const cancelContractAction = async (id: string) => act((ctx) => contracts
 export const reopenContractAction = async (id: string) => act((ctx) => contracts.reopenContract(ctx, id), "Contrato reaberto para nova versão.");
 export const saveTemplateAction = async (id: string | null, input: unknown) => act((ctx) => contracts.saveTemplate(ctx, id, input), "Modelo salvo.");
 export const createSuggestedTemplatesAction = async () => act((ctx) => contracts.createSuggestedTemplates(ctx), "Modelos sugeridos criados. Revise o texto com o jurídico da agência.");
+export const deleteClientDocumentAction = async (id: string) => act((ctx) => finance.deleteClientDocument(ctx, id), "Documento removido.");
 export const prepareContractAction = async (saleId: string) =>
   act(async (ctx) => {
     assertCan(ctx, "contracts.manage");
@@ -223,3 +226,10 @@ export const disconnectFredyAction = async () => act((ctx) => fredy.disconnectFr
 export const sendContractToSignatureAction = async (id: string, input: unknown) =>
   act((ctx) => (dispatchSoon(ctx.companyId), zapsign.sendContractToZapSign(ctx, id, input)), "Contrato enviado para assinatura.");
 export const checkContractSignatureAction = async (id: string) => act((ctx) => (dispatchSoon(ctx.companyId), zapsign.checkContractSignature(ctx, id)));
+
+// ------------------------------ Importação de clientes (planilha e Monde) ------------------------------
+export const importClientsCsvAction = async (csv: string) => act((ctx) => clientImport.importClientsCsv(ctx, csv));
+export const connectMondeAction = async (input: { login: string; password: string }) => act((ctx) => monde.connectMonde(ctx, input), "Monde conectado.");
+export const disconnectMondeAction = async () => act((ctx) => monde.disconnectMonde(ctx), "Monde desconectado.");
+export const restartMondeImportAction = async () => act((ctx) => monde.restartMondeImport(ctx));
+export const importMondeBatchAction = async () => act((ctx) => monde.importMondeBatch(ctx));

@@ -20,7 +20,8 @@ import { refreshInvoiceStatus } from "./invoices";
 import { assertPayableCategory, categoryMap } from "./admin";
 import { textContains, entryDelegate } from "./query";
 import { applyCardCharge, reverseCardCharge, CARD_BILL_CATEGORY } from "./cards";
-import { ATTACHMENT_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
+import { ATTACHMENT_KINDS, CLIENT_DOC_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
+import { clientScope } from "./registry";
 
 export type EntryKind = "receivable" | "payable";
 
@@ -663,7 +664,7 @@ export async function cashflow(
 export const ALLOWED_MIME = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
-export type AttachmentTarget = { kind: EntryKind | "sale" | "trip" | "invoice"; id: string };
+export type AttachmentTarget = { kind: EntryKind | "sale" | "trip" | "invoice" | "client"; id: string };
 
 /** Valida o acesso ao destino do anexo (lançamento, venda, viagem ou fatura) dentro da empresa. */
 export async function assertAttachmentTarget(ctx: Ctx, target: AttachmentTarget, write: boolean) {
@@ -671,6 +672,9 @@ export async function assertAttachmentTarget(ctx: Ctx, target: AttachmentTarget,
     assertCan(ctx, write ? "finance.manage" : "finance.view");
     const [e] = await entryDelegate(prisma as unknown as Tx, target.kind).findMany({ where: { id: target.id, companyId: ctx.companyId } });
     if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
+  } else if (target.kind === "client") {
+    if (write) assertCan(ctx, "clients.manage");
+    if (!(await prisma.client.findFirst({ where: { AND: [{ id: target.id }, clientScope(ctx)] }, select: { id: true } }))) throw new AppError("Cliente não encontrado.", "NOT_FOUND");
   } else if (target.kind === "invoice") {
     assertCan(ctx, write ? "finance.manage" : "finance.view");
     if (!(await prisma.supplierInvoice.findFirst({ where: { id: target.id, companyId: ctx.companyId } }))) throw new AppError("Fatura não encontrada.", "NOT_FOUND");
@@ -683,17 +687,22 @@ export async function assertAttachmentTarget(ctx: Ctx, target: AttachmentTarget,
   }
 }
 
-const targetField = { receivable: "receivableId", payable: "payableId", sale: "saleId", trip: "tripId", invoice: "invoiceId" } as const;
+const targetField = { receivable: "receivableId", payable: "payableId", sale: "saleId", trip: "tripId", invoice: "invoiceId", client: "clientId" } as const;
 
 export async function registerAttachment(
   ctx: Ctx,
   target: AttachmentTarget,
-  file: { fileName: string; mimeType: string; sizeBytes: number; storageKey: string; kind?: string },
+  file: { fileName: string; mimeType: string; sizeBytes: number; storageKey: string; kind?: string; docNumber?: string | null; docExpiry?: string | null },
 ) {
   if (!ALLOWED_MIME.includes(file.mimeType)) throw new AppError("Formato não permitido. Envie PDF, PNG, JPG ou WEBP.");
   if (file.sizeBytes > MAX_ATTACHMENT_BYTES) throw new AppError("Arquivo maior que 5 MB.");
   await assertAttachmentTarget(ctx, target, true);
-  const kind = file.kind && ATTACHMENT_KINDS.values.includes(file.kind as never) ? file.kind : target.kind === "invoice" ? "FATURA" : target.kind === "sale" || target.kind === "trip" ? "DOCUMENTO" : "COMPROVANTE";
+  const kind =
+    target.kind === "client"
+      ? CLIENT_DOC_KINDS.values.includes(file.kind as never) ? file.kind! : "OUTRO_DOC"
+      : file.kind && ATTACHMENT_KINDS.values.includes(file.kind as never) && !CLIENT_DOC_KINDS.values.includes(file.kind as never) ? file.kind : target.kind === "invoice" ? "FATURA" : target.kind === "sale" || target.kind === "trip" ? "DOCUMENTO" : "COMPROVANTE";
+  const docNumber = target.kind === "client" ? file.docNumber?.trim().slice(0, 40) || null : null;
+  const docExpiry = target.kind === "client" && file.docExpiry && /^d{4}-d{2}-d{2}$/.test(file.docExpiry) ? file.docExpiry : null;
   return prisma.$transaction(async (tx) => {
     const a = await tx.attachment.create({
       data: {
@@ -705,8 +714,16 @@ export async function registerAttachment(
         sizeBytes: file.sizeBytes,
         storageKey: file.storageKey,
         uploadedById: ctx.userId,
+        docNumber,
+        docExpiry,
       },
     });
+    if (target.kind === "client" && docNumber) {
+      // completa o cadastro com o número do documento, sem sobrescrever o que já foi digitado
+      const c = await tx.client.findUniqueOrThrow({ where: { id: target.id }, select: { rg: true, passportNumber: true, passportExpiry: true } });
+      if (kind === "RG" && !c.rg) await tx.client.update({ where: { id: target.id }, data: { rg: docNumber } });
+      if (kind === "PASSAPORTE" && !c.passportNumber) await tx.client.update({ where: { id: target.id }, data: { passportNumber: docNumber, passportExpiry: c.passportExpiry ?? docExpiry } });
+    }
     await audit(tx, ctx, "anexo.enviado", "Attachment", a.id, { target, kind });
     return a.id;
   });
@@ -715,7 +732,9 @@ export async function registerAttachment(
 export async function getAttachment(ctx: Ctx, id: string) {
   const a = await prisma.attachment.findFirst({ where: { id, companyId: ctx.companyId } });
   if (!a) throw new AppError("Anexo não encontrado.", "NOT_FOUND");
-  const target: AttachmentTarget | null = a.saleId
+  const target: AttachmentTarget | null = a.clientId
+    ? { kind: "client", id: a.clientId }
+    : a.saleId
     ? { kind: "sale", id: a.saleId }
     : a.tripId
       ? { kind: "trip", id: a.tripId }
@@ -725,6 +744,18 @@ export async function getAttachment(ctx: Ctx, id: string) {
   if (target) await assertAttachmentTarget(ctx, target, false);
   else assertCan(ctx, "finance.view");
   return a;
+}
+
+/** Remove um documento do cliente (fotos de RG, passaporte...). Outros anexos são preservados para auditoria. */
+export async function deleteClientDocument(ctx: Ctx, id: string) {
+  assertCan(ctx, "clients.manage");
+  const a = await prisma.attachment.findFirst({ where: { id, companyId: ctx.companyId, clientId: { not: null } } });
+  if (!a) throw new AppError("Documento não encontrado.", "NOT_FOUND");
+  await assertAttachmentTarget(ctx, { kind: "client", id: a.clientId! }, true);
+  await prisma.$transaction(async (tx) => {
+    await tx.attachment.delete({ where: { id } });
+    await audit(tx, ctx, "documento_cliente.removido", "Attachment", id, { clientId: a.clientId, kind: a.kind });
+  });
 }
 
 export async function financeOptions(ctx: Ctx) {

@@ -13,7 +13,7 @@ function sniff(buf: Buffer): string | null {
   return null;
 }
 
-const TARGETS = ["receivable", "payable", "sale", "trip", "invoice"] as const;
+const TARGETS = ["receivable", "payable", "sale", "trip", "invoice", "client"] as const;
 
 export async function POST(req: Request) {
   const ctx = await getContext();
@@ -24,6 +24,8 @@ export async function POST(req: Request) {
     const kind = String(form.get("kind") ?? "");
     const id = String(form.get("id") ?? "");
     const docKind = form.get("docKind") ? String(form.get("docKind")) : undefined;
+    const docNumber = form.get("docNumber") ? String(form.get("docNumber")) : null;
+    const docExpiry = form.get("docExpiry") ? String(form.get("docExpiry")) : null;
     if (!(file instanceof File) || !TARGETS.includes(kind as never) || !id) throw new AppError("Requisição inválida.");
     const target = { kind, id } as AttachmentTarget;
     // valida permissão e destino ANTES de gravar o arquivo
@@ -33,7 +35,7 @@ export async function POST(req: Request) {
     const mime = sniff(buf);
     if (!mime || !ALLOWED_MIME.includes(mime)) throw new AppError("Formato não permitido. Envie PDF, PNG, JPG ou WEBP.");
     const key = await saveFile(ctx.companyId, buf, mime.split("/")[1]);
-    const attachmentId = await registerAttachment(ctx, target, { fileName: file.name, mimeType: mime, sizeBytes: file.size, storageKey: key, kind: docKind });
+    const attachmentId = await registerAttachment(ctx, target, { fileName: file.name, mimeType: mime, sizeBytes: file.size, storageKey: key, kind: docKind, docNumber, docExpiry });
     return NextResponse.json({ id: attachmentId });
   } catch (e) {
     if (e instanceof AppError) return NextResponse.json({ error: e.message }, { status: e.code === "FORBIDDEN" ? 403 : 400 });

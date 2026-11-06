@@ -176,13 +176,25 @@ export const INVOICE_STATUS = labels({
   CANCELADA: "Cancelada",
 });
 
+export const CLIENT_DOC_KINDS = labels({
+  RG: "RG",
+  CPF_DOC: "CPF",
+  CNH: "CNH",
+  PASSAPORTE: "Passaporte",
+  VISTO: "Visto",
+  CERTIDAO: "Certidão de nascimento",
+  COMPROVANTE_RESIDENCIA: "Comprovante de residência",
+  OUTRO_DOC: "Outro documento",
+});
+
 export const ATTACHMENT_KINDS = labels({
   VOUCHER: "Voucher",
   DOCUMENTO: "Documento de viagem",
   COMPROVANTE: "Comprovante",
   FATURA: "Fatura",
   OUTRO: "Outro",
-});
+  ...Object.fromEntries(CLIENT_DOC_KINDS.values.map((v) => [v, CLIENT_DOC_KINDS.label(v)])),
+} as Record<string, string>);
 
 export const REFUND_KINDS = labels({
   REEMBOLSO_CLIENTE: "Reembolso ao cliente",

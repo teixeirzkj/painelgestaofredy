@@ -2,8 +2,9 @@ import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
 import { Plus, Plane, ShieldCheck, ShieldOff, Map, IdCard, AlertTriangle } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
-import { can } from "@/server/context";
+import { can, today } from "@/server/context";
 import { getClient } from "@/server/services/registry";
+import { ClientDocuments } from "./client-documents";
 import { Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th, Badge } from "@/components/ui";
 import { ContractStatusBadge, EntryStatusBadge, SaleStatusBadge, TripStatusBadge } from "@/components/status";
 import { Notice } from "@/components/ui";
@@ -61,6 +62,10 @@ export default async function ClientPage({ params }: { params: Params }) {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
+          <Card>
+            <CardHeader title="Documentos do cliente" icon={IdCard} description="Fotos do RG, CPF, CNH, passaporte e outros, com número e validade" />
+            <ClientDocuments clientId={c.id} docs={c.attachments} canManage={canManage && !c.archivedAt} todayStr={today(ctx)} />
+          </Card>
           <Card>
             <CardHeader title="Compras realizadas" />
             {sales.length === 0 ? (
