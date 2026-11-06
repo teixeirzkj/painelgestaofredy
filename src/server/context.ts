@@ -15,6 +15,8 @@ export type Ctx = {
   role: Role;
   timezone: string;
   permissions: Set<Permission>;
+  /** entrou pelo login de longa duração da venda rápida (vale só no popup) */
+  viaEmbed?: boolean;
 };
 
 export async function loadContext(userId: string): Promise<Ctx | null> {

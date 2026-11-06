@@ -8,7 +8,12 @@ export const metadata = { title: "Entrar" };
 export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
-  if (await getContext()) redirect(next ?? "/");
+  const ctx = await getContext();
+  if (ctx) {
+    const dest = ctx.role === "ATENDENTE" && !(next ?? "").startsWith("/balcao") ? "/balcao" : (next ?? "/");
+    // só o login longo do popup: ele não abre a gestão, então pede o login normal
+    if (!ctx.viaEmbed || dest.startsWith("/balcao") || ctx.role === "ATENDENTE") redirect(dest);
+  }
   const demo = process.env.NODE_ENV !== "production";
   return (
     <div className="grid min-h-screen lg:grid-cols-2">

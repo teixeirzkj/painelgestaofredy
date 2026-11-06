@@ -76,9 +76,10 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
     return { error: "E-mail ou senha inválidos." };
   }
   attempts.delete(email);
-  await createSession(user.id);
-  await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
   const next = String(form.get("next") ?? "");
+  // entrando pela venda rápida (popup, inclusive embutido no WTS): guarda também o login de longa duração do popup
+  await createSession(user.id, { embedded: next.startsWith("/balcao") || user.role === "ATENDENTE" });
+  await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
   // só caminhos internos (evita redirecionar para outro site)
   const safe = next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
   // atendente só usa a venda rápida
