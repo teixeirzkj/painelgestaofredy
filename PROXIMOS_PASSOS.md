@@ -75,6 +75,28 @@ No ar em https://painelgestaofredy.vercel.app (GitHub teixeirzkj/painelgestaofre
 - [ ] **(você)** Contratar a ZapSign, gerar o token da API (*Configurações → Integrações → API ZapSign*) e colocá-lo na Vercel como `ZAPSIGN_API_TOKEN`. O webhook é registrado sozinho no primeiro envio.
 - [ ] **(você)** Revisão jurídica dos modelos de contrato. Os modelos atuais são rascunhos.
 
+## Pedidos da cliente (novembro/2026)
+
+- [x] **(eu)** Documentos do cliente com imagem: fotos de RG, CPF, CNH, passaporte, visto e outros, com número e validade, na ficha do cliente. Dá para enviar, arrastar, colar ou tirar a foto pelo celular. O número do RG e do passaporte completa o cadastro.
+- [x] **(eu)** Importar clientes por planilha (CSV, com modelo para baixar). Não duplica: completa só os campos vazios.
+- [x] **(eu)** Importar clientes do Monde pela API oficial, com login e senha de um usuário com acesso total no Monde. A API do Monde **não entrega vendas nem as imagens** dos documentos.
+- [ ] **(você)** Exportar do Monde a planilha de vendas e me mandar um arquivo de exemplo. **(eu)** faço a importação das vendas antigas a partir das colunas reais.
+- [x] **(eu)** Venda rápida (popup do vendedor) em `/balcao`: cliente com documentos, venda e contrato numa tela só.
+  - Com `?card=ID` (id do card do Frédy), já vem com o contato, o valor e os campos do card, e a venda fica ligada ao card.
+  - O link está em Configurações → Integrações.
+- [x] **(eu)** Vouchers e documentos da venda com miniatura das imagens, vários arquivos de uma vez, arrastar e colar.
+- [x] **(eu)** Eventos para mensagens automáticas pelo n8n:
+  - aniversário (`cliente.aniversario`);
+  - lembrete de check-in na véspera (`viagem.checkin`);
+  - pedido de feedback após o retorno (`viagem.concluida`);
+  - parcela vencendo e pagamento recebido.
+
+  Cada evento traz nome, WhatsApp com 55, e-mail e o consentimento (`messagingAllowed`). O webhook tem o botão "Enviar evento de teste".
+- [ ] **(você)** No n8n, criar o fluxo que recebe o webhook e envia as mensagens pelo WhatsApp com modelos aprovados, e ligar cada automação em Automações.
+- [x] **(eu)** Cartão de crédito da agência: fornecedor que só aceita cartão é pago com o cartão, à vista ou parcelado.
+  - A conta do fornecedor fica quitada e o valor entra na fatura do mês certo, que vira conta a pagar no vencimento do cartão.
+  - A compra fica fora do caixa até a fatura ser paga, e fora do DRE.
+
 ## Fase 5 — Pagamentos e bancos
 
 1. [ ] **(você)** Escolher o gateway (Asaas, Efí ou Banco Inter) e gerar as credenciais.
