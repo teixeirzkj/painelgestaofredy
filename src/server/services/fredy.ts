@@ -466,3 +466,40 @@ export async function hasActiveFredy(companyId: string) {
   const i = await prisma.fredyIntegration.findUnique({ where: { companyId }, select: { syncBack: true, status: true } });
   return !!i && i.syncBack;
 }
+
+// ------------------------------ Tela do vendedor (popup) ------------------------------
+
+/**
+ * Lê o card do Frédy para pré-preencher a tela do vendedor: contato (nome, e-mail, telefone),
+ * valor e os campos mapeados (destino, datas, passageiros). Só leitura.
+ */
+export async function fredyCardPrefill(ctx: Ctx, cardId: string) {
+  const { integ, token } = await tokenFor(ctx.companyId);
+  const card = await wts<FredyCard>(token, "crm", `/v2/panel/card/${encodeURIComponent(cardId)}`, { query: { IncludeDetails: CARD_DETAILS } }).catch(() => null);
+  if (!card) throw new AppError("Card do Frédy não encontrado. Confira o link.", "NOT_FOUND");
+  const map = JSON.parse(integ.fieldMapJson || "{}") as FieldMap;
+  const cf = card.customFields ?? {};
+  const pick = (k?: string) => (k ? cf[k] : undefined);
+  const contactId = card.contactIds?.[0] ?? card.contacts?.[0]?.id ?? null;
+  const contact = contactId ? await wts<FredyContact>(token, "core", `/v1/contact/${encodeURIComponent(contactId)}`).catch(() => null) : null;
+  const pax = parseInt(fieldText(pick(map.passengerCount)) ?? "", 10);
+  const existing = await prisma.sale.findFirst({ where: { companyId: ctx.companyId, externalRef: `fredy:${card.id}` }, select: { id: true, code: true, status: true } });
+  return {
+    cardId: card.id,
+    title: card.title,
+    priceCents: Math.max(0, Math.round((card.monetaryAmount ?? 0) * 100)),
+    destination: fieldText(pick(map.destination))?.slice(0, 120) ?? null,
+    tripStart: toIsoDate(pick(map.tripStart)),
+    tripEnd: toIsoDate(pick(map.tripEnd)),
+    passengerCount: Number.isFinite(pax) && pax >= 1 && pax <= 500 ? pax : null,
+    contact: contact ? { id: contact.id, name: contact.name?.trim() || null, email: contact.email?.trim().toLowerCase() || null, phone: digits(contact.phoneNumber) || null } : null,
+    existingSale: existing,
+  };
+}
+
+/** Garante que o card existe e ainda não virou venda, para a venda feita na tela do vendedor ficar ligada a ele. */
+export async function assertCardAvailable(ctx: Ctx, cardId: string) {
+  const p = await fredyCardPrefill(ctx, cardId);
+  if (p.existingSale) throw new AppError(`Este card já virou a venda ${p.existingSale.code}.`, "CONFLICT");
+  return { meta: { origin: "FREDY" as const, externalRef: `fredy:${p.cardId}` }, contactId: p.contact?.id ?? null };
+}

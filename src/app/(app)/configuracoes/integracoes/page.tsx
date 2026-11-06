@@ -1,6 +1,8 @@
 import { requirePageContext } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { getFredyIntegration, listFredyPanels, getFredyPanelSetup, FIELD_TARGETS } from "@/server/services/fredy";
+import { getFredyIntegration, listFredyPanels, getFredyPanelSetup, FIELD_TARGETS, publicBaseUrl } from "@/server/services/fredy";
+import { headers } from "next/headers";
+import { QuickSaleLink } from "./quick-sale-link";
 import { PageHeader } from "@/components/ui";
 import { PRODUCT_TYPES } from "@/lib/constants";
 import { FredyIntegrationPanel } from "./fredy-client";
@@ -21,6 +23,8 @@ export default async function IntegrationsPage() {
       loadError = e instanceof Error ? e.message : "Não foi possível ler o CRM agora.";
     }
   }
+  const h = await headers();
+  const base = publicBaseUrl() ?? `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
   const users = await prisma.user.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } });
   return (
     <>
@@ -34,6 +38,7 @@ export default async function IntegrationsPage() {
         productTypes={PRODUCT_TYPES.values.map((v) => ({ value: v, label: PRODUCT_TYPES.label(v) }))}
         fieldTargets={FIELD_TARGETS}
       />
+      <QuickSaleLink base={base} />
     </>
   );
 }

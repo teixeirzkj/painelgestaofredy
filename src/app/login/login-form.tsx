@@ -4,10 +4,11 @@ import { loginAction } from "@/app/actions";
 import { Button, Field, Input } from "@/components/ui";
 import { PasswordInput } from "@/components/ui/client";
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string }) {
   const [state, formAction, pending] = useActionState(loginAction, {});
   return (
     <form action={formAction} className="mt-6 space-y-4">
+      {next && <input type="hidden" name="next" value={next} />}
       <Field label="E-mail">
         <Input name="email" type="email" autoComplete="email" required autoFocus />
       </Field>

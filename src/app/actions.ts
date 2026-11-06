@@ -77,7 +77,9 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
   attempts.delete(email);
   await createSession(user.id);
   await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
-  redirect("/");
+  const next = String(form.get("next") ?? "");
+  // só caminhos internos (evita redirecionar para outro site)
+  redirect(next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/");
 }
 
 export async function logoutAction() {
@@ -96,7 +98,15 @@ function dispatchSoon(companyId: string) {
 }
 
 // ------------------------------ Vendas ------------------------------
-export const createSaleAction = async (input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.createSale(ctx, input)), "Venda registrada.");
+export const createSaleAction = async (input: unknown, opts?: { fredyCardId?: string | null }) =>
+  act(async (ctx) => {
+    dispatchSoon(ctx.companyId);
+    // venda feita pela tela do vendedor a partir de um card: fica ligada ao card (a confirmação atualiza o card)
+    const link = opts?.fredyCardId ? await fredy.assertCardAvailable(ctx, opts.fredyCardId) : null;
+    const sale = await sales.createSale(ctx, input, link?.meta);
+    if (link?.contactId) await prisma.client.updateMany({ where: { companyId: ctx.companyId, fredyContactId: null, sales: { some: { id: sale.id } } }, data: { fredyContactId: link.contactId } });
+    return sale;
+  }, "Venda registrada.");
 export const updateSaleAction = async (id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.updateSale(ctx, id, input)), "Venda atualizada.");
 export const cancelSaleAction = async (id: string, reason: string) => act((ctx) => sales.cancelSale(ctx, id, reason), "Venda cancelada.");
 export const duplicateSaleAction = async (id: string) => act((ctx) => sales.duplicateSale(ctx, id), "Venda duplicada como rascunho.");

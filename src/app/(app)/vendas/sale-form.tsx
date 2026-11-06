@@ -230,6 +230,8 @@ export function SaleForm({
   showMargin,
   rules = [],
   excursions = [],
+  fredyCardId,
+  afterSaveHref,
 }: {
   initial: SaleFormInitial;
   suppliers: { id: string; name: string; category?: string }[];
@@ -238,6 +240,10 @@ export function SaleForm({
   showMargin: boolean;
   rules?: Rule[];
   excursions?: Excursion[];
+  /** venda feita a partir de um card do Frédy (tela do vendedor): fica ligada ao card */
+  fredyCardId?: string | null;
+  /** para onde ir depois de salvar; ":id" vira o id da venda */
+  afterSaveHref?: string;
 }) {
   const router = useRouter();
   const { run, busy } = useAction();
@@ -414,9 +420,9 @@ export function SaleForm({
       passengers: passengers.filter((p) => p.name.trim()).map(({ uid: _u, ...p }) => ({ ...p, clientId: p.clientId || null })),
       confirm,
     };
-    const r = await run(() => (editing ? updateSaleAction(initial.id!, payload) : createSaleAction(payload)), {
+    const r = await run(() => (editing ? updateSaleAction(initial.id!, payload) : createSaleAction(payload, { fredyCardId })), {
       refresh: false,
-      onSuccess: (d) => router.push(`/vendas/${d.id}`),
+      onSuccess: (d) => router.push(afterSaveHref ? afterSaveHref.replace(":id", d.id) : `/vendas/${d.id}`),
     });
     if (!r.ok) setErrors(issuesToMap(r.issues));
   }

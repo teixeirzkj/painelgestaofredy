@@ -5,8 +5,10 @@ import { LoginForm } from "./login-form";
 
 export const metadata = { title: "Entrar" };
 
-export default async function LoginPage() {
-  if (await getContext()) redirect("/");
+export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const sp = await searchParams;
+  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
+  if (await getContext()) redirect(next ?? "/");
   const demo = process.env.NODE_ENV !== "production";
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
@@ -31,7 +33,7 @@ export default async function LoginPage() {
         <div className="w-full max-w-sm">
           <h2 className="font-display text-2xl font-bold text-ink">Entrar</h2>
           <p className="mt-1 text-sm text-muted">Acesse a gestão da sua agência.</p>
-          <LoginForm />
+          <LoginForm next={next} />
           {demo && (
             <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
               <p className="mb-2 font-semibold">Ambiente de demonstração — usuários fictícios (senha: demo1234)</p>
