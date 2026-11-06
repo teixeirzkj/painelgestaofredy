@@ -1,0 +1,80 @@
+/** PDF do contrato emitido (download no popup e envio pela conversa do Frédy). */
+import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
+import { prisma } from "@/server/db";
+import { assertCan, type Ctx } from "@/server/context";
+import { AppError } from "@/server/errors";
+import { saleScope } from "./sales";
+
+const ISSUED = ["AGUARDANDO_ENVIO", "ENVIADO", "ASSINADO"];
+
+/** As fontes padrão do PDF só têm o alfabeto latino: troca o que não couber. */
+function latin(text: string) {
+  return text
+    .replace(/[\u2018\u2019\u201A]/g, "'")
+    .replace(/[\u201C\u201D\u201E]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2022\u25CF\u25AA]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/[\u00A0\u2007\u202F]/g, " ")
+    .replace(/\t/g, "    ")
+    .replace(/[^\n\x20-\x7E\u00A1-\u00FF]/g, "?");
+}
+
+function wrap(line: string, font: PDFFont, size: number, max: number) {
+  if (!line.trim()) return [""];
+  const out: string[] = [];
+  let cur = "";
+  for (const word of line.split(/(\s+)/)) {
+    const next = cur + word;
+    if (font.widthOfTextAtSize(next, size) <= max) {
+      cur = next;
+      continue;
+    }
+    if (cur.trim()) out.push(cur.trimEnd());
+    cur = word.trimStart();
+    // palavra maior que a linha: quebra no meio
+    while (font.widthOfTextAtSize(cur, size) > max) {
+      let i = cur.length - 1;
+      while (i > 1 && font.widthOfTextAtSize(cur.slice(0, i), size) > max) i--;
+      out.push(cur.slice(0, i));
+      cur = cur.slice(i);
+    }
+  }
+  if (cur.trim()) out.push(cur.trimEnd());
+  return out;
+}
+
+export async function contractPdf(ctx: Ctx, id: string) {
+  assertCan(ctx, "contracts.manage");
+  const c = await prisma.contract.findFirst({
+    where: { id, companyId: ctx.companyId, sale: saleScope(ctx) },
+    select: { content: true, status: true, sale: { select: { code: true, client: { select: { name: true } } } } },
+  });
+  if (!c || !c.content) throw new AppError("Contrato não encontrado.", "NOT_FOUND");
+  if (!ISSUED.includes(c.status)) throw new AppError("Emita o contrato antes de baixar ou enviar.", "CONFLICT");
+
+  const pdf = await PDFDocument.create();
+  pdf.setTitle(`Contrato ${c.sale.code}`);
+  const font = await pdf.embedFont(StandardFonts.TimesRoman);
+  const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const W = 595.28, H = 841.89, M = 56, size = 11, lead = 15.5;
+  let page = pdf.addPage([W, H]);
+  let y = H - M;
+  latin(c.content).split(String.fromCharCode(10)).forEach((raw, idx) => {
+    const f = idx === 0 ? bold : font; // primeira linha: título
+    for (const l of wrap(raw, f, size, W - 2 * M)) {
+      if (y < M + lead) {
+        page = pdf.addPage([W, H]);
+        y = H - M;
+      }
+      if (l) page.drawText(l, { x: M, y, size, font: f, color: rgb(0.1, 0.12, 0.16) });
+      y -= lead;
+    }
+  });
+  const pages = pdf.getPages();
+  pages.forEach((p, i) => {
+    const t = latin(`${c.sale.code} - página ${i + 1} de ${pages.length}`);
+    p.drawText(t, { x: W - M - font.widthOfTextAtSize(t, 8), y: M / 2, size: 8, font, color: rgb(0.45, 0.48, 0.55) });
+  });
+  return { bytes: await pdf.save(), fileName: `Contrato ${c.sale.code} - ${c.sale.client.name}.pdf` };
+}

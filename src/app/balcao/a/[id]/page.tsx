@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowRight, CheckCircle2, Download, MessageCircle, Plus, UserRound } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, MessageCircle, UserRound } from "lucide-react";
 import { today } from "@/server/context";
 import { AppError } from "@/server/errors";
 import { BALCAO_STEPS, DONE_STEP, loadFlow } from "@/server/services/balcao";
-import { fredyCardPrefill } from "@/server/services/fredy";
+import { fredyCardPrefill, fredyConnected } from "@/server/services/fredy";
 import { getContract } from "@/server/services/contracts";
 import { zapsignConfigured, signatureCostCents } from "@/server/services/zapsign";
 import { prisma } from "@/server/db";
@@ -22,7 +22,7 @@ import { formatDocument } from "@/lib/utils";
 import { str, type Params, type SearchParams } from "@/lib/params";
 import { balcaoContext } from "../../shared";
 import { BalcaoHeader, StepBox } from "../../header";
-import { AttachDraftButton, DiscardFlowButton, FlowMarkButton, PrepareContractButton } from "../../flow-buttons";
+import { AttachDraftButton, AutoClose, DiscardFlowButton, FlowMarkButton, PrepareContractButton, SendViaFredyButton } from "../../flow-buttons";
 
 const btn = "inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold";
 
@@ -83,7 +83,23 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
         Clique em <strong>Confirmar venda</strong>: ela entra no painel de gestão com o financeiro e o contrato.
       </>,
     ];
-    if (sale && sale.status !== "ORCAMENTO") {
+    const contractSent = contract && (contract.status === "ENVIADO" || contract.status === "ASSINADO");
+    if (sale && sale.status !== "ORCAMENTO" && sale.status !== "CANCELADA" && !contractSent) {
+      // venda confirmada, contrato ainda não enviado: dá para voltar e ajustar (ex.: passageiros esquecidos)
+      const { sale: _s, ...form } = await editSaleFormData(ctx, sale.id);
+      void _s;
+      body = (
+        <div className="space-y-4">
+          <StepBox n={4} title="Ajustar a venda" steps={["Corrija o que precisar (passageiros, datas, valores, pagamento) e clique em salvar.", "Depois, na etapa 5, atualize a prévia e emita o contrato de novo."]}>
+            <p className="px-5 py-3 text-sm text-slate-600">
+              Venda {sale.code} já confirmada.{" "}
+              {contract && ["AGUARDANDO_ENVIO"].includes(contract.status) ? "O contrato já emitido fica marcado como desatualizado e precisa ser emitido de novo." : ""}
+            </p>
+          </StepBox>
+          <SaleForm {...form} afterSaveHref={base} />
+        </div>
+      );
+    } else if (sale && sale.status !== "ORCAMENTO") {
       body = (
         <StepBox n={4} title="Lançar e confirmar a venda">
           <div className="flex flex-wrap items-center gap-2 px-5 py-4 text-sm">
@@ -93,7 +109,7 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
               {sale.tripStart && ` · ${formatDate(sale.tripStart)}`} · <span className="tabular">{formatBRL(sale.grossCents)}</span>
             </span>
           </div>
-          <p className="px-5 pb-4 text-xs text-muted">Venda confirmada e registrada no painel de gestão. Para alterar, peça ao gestor.</p>
+          <p className="px-5 pb-4 text-xs text-muted">Venda confirmada e contrato já enviado ao cliente. Para alterar agora, peça ao gestor.</p>
           {footer(goCurrent)}
         </StepBox>
       );
@@ -180,6 +196,13 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
         </StepBox>
       );
     } else if (view === 5) {
+      // campos que o modelo pediu e a venda não tem (ex.: lista de passageiros) aparecem no texto como "[... não informado]"
+      const blanks = [...new Set([...(full.content ?? "").matchAll(/\[([^\]\n]{2,60}?) não informad[oa]s?\]/g)].map((m) => m[1]))];
+      const backToSale = (
+        <Link href={`${base}?etapa=4`} className={`${btn} border border-line bg-white text-ink hover:bg-slate-50`}>
+          <ArrowLeft className="h-4 w-4" /> Voltar para a venda e ajustar
+        </Link>
+      );
       body = (
         <StepBox
           n={5}
@@ -188,11 +211,27 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
             <>
               Clique em <strong>Atualizar prévia</strong> e leia o contrato.
             </>,
+            "Se faltar alguma informação (passageiros, datas, valores), clique em Voltar para a venda e ajustar.",
             <>
-              Clique em <strong>Emitir contrato</strong>. Se aparecer “Falta para emitir”, complete o dado que falta (cliente na etapa 2) e atualize a prévia.
+              Com tudo certo, clique em <strong>Emitir contrato</strong>.
             </>,
           ]}
         >
+          {(missing.length > 0 || blanks.length > 0 || full.outdated) && (
+            <div className="no-print space-y-2 border-b border-line bg-amber-50 px-5 py-3 text-sm text-amber-900">
+              {full.outdated && <p><strong>A venda foi alterada depois da emissão.</strong> Clique em Atualizar prévia e emita o contrato de novo.</p>}
+              {missing.length > 0 && (
+                <p>
+                  <strong>Falta para emitir:</strong> {missing.join(", ")}. {missing.some((m) => /cliente|cpf|endere/i.test(m)) && <Link href={`${base}?etapa=2`} className="underline">Completar o cliente</Link>}
+                </p>
+              )}
+              {blanks.length > 0 && (
+                <p>
+                  <strong>Em branco no contrato:</strong> {blanks.join(", ")}. Se precisar, volte para a venda e preencha.
+                </p>
+              )}
+            </div>
+          )}
           <div className="print-area">
             <div className="no-print flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
               <p className="flex flex-1 items-center gap-2 text-sm font-semibold text-ink">
@@ -200,35 +239,48 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
               </p>
               <div className="flex flex-wrap gap-2">{actions}</div>
             </div>
-            {missing.length > 0 && <p className="no-print border-b border-line bg-amber-50 px-5 py-2 text-xs text-amber-900">Falta para emitir: {missing.join(", ")}.</p>}
             <article className="max-h-[55vh] overflow-auto whitespace-pre-wrap px-8 py-6 font-serif text-[14px] leading-relaxed text-slate-800 print:max-h-none print:overflow-visible">
               {full.content ?? "Nenhum conteúdo gerado ainda. Clique em “Atualizar prévia”."}
             </article>
           </div>
-          {reviewing && footer(goCurrent)}
+          <div className="no-print flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
+            {backToSale}
+            {reviewing && goCurrent}
+          </div>
         </StepBox>
       );
     } else {
       const sentAuto = full.status === "ENVIADO" || full.status === "ASSINADO";
+      const viaFredy = await fredyConnected(ctx.companyId);
       body = (
         <StepBox
           n={6}
           title="Enviar o contrato ao cliente"
-          steps={[
-            <>
-              Clique em <strong>Baixar contrato (PDF)</strong>.
-            </>,
-            <>
-              Clique em <strong>Abrir o WhatsApp do cliente</strong> e anexe o PDF baixado na conversa.
-            </>,
-            "Depois de enviar, clique em Enviei ao cliente.",
-          ]}
+          steps={
+            viaFredy
+              ? [
+                  <>
+                    Clique em <strong>Enviar contrato pelo Frédy</strong>: o PDF vai direto na conversa aberta do cliente.
+                  </>,
+                  "Se o cliente não tiver conversa aberta no Frédy, abra a conversa com ele e clique de novo.",
+                ]
+              : [
+                  <>
+                    Clique em <strong>Baixar contrato (PDF)</strong>.
+                  </>,
+                  <>
+                    Clique em <strong>Abrir o WhatsApp do cliente</strong> e anexe o PDF baixado na conversa.
+                  </>,
+                  "Depois de enviar, clique em Enviei ao cliente.",
+                ]
+          }
         >
           <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+            {viaFredy && !sentAuto && !reviewing && <SendViaFredyButton id={flowId} />}
             <a href={`/api/contratos/${full.id}/pdf`} download className={`${btn} border border-line bg-white text-ink hover:bg-slate-50`}>
               <Download className="h-4 w-4" /> Baixar contrato (PDF)
             </a>
-            {wa && (
+            {!viaFredy && wa && (
               <a
                 href={`https://wa.me/${wa}?text=${encodeURIComponent(
                   full.signUrl && full.status === "ENVIADO"
@@ -244,8 +296,17 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
             )}
             {zapsignConfigured() && <div className="flex flex-wrap gap-2">{actions}</div>}
           </div>
-          {!wa && <p className="px-5 pb-3 text-xs text-amber-800">O cliente está sem WhatsApp no cadastro. Envie o PDF pelo canal que ele usa.</p>}
-          {footer(reviewing || sentAuto ? goCurrent : <FlowMarkButton id={flowId} mark="sent" label="Enviei ao cliente, continuar" />)}
+          {!viaFredy && !wa && <p className="px-5 pb-3 text-xs text-amber-800">O cliente está sem WhatsApp no cadastro. Envie o PDF pelo canal que ele usa.</p>}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
+            <Link href={`${base}?etapa=4`} className="inline-flex items-center gap-1 text-sm text-muted hover:text-ink hover:underline">
+              <ArrowLeft className="h-3.5 w-3.5" /> Voltar para a venda e ajustar
+            </Link>
+            {reviewing || sentAuto ? (
+              goCurrent
+            ) : (
+              <FlowMarkButton id={flowId} mark="sent" label={viaFredy ? "Já enviei por outro meio" : "Enviei ao cliente, continuar"} variant={viaFredy ? "outline" : "primary"} />
+            )}
+          </div>
         </StepBox>
       );
     }
@@ -261,17 +322,25 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
       <Card>
         <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
           <CheckCircle2 className="h-12 w-12 text-emerald-500" />
-          <h1 className="font-display text-xl font-semibold text-ink">Atendimento concluído</h1>
-          <p className="text-sm text-muted">
-            {client.name}
-            {sale && ` · venda ${sale.code} · ${formatBRL(sale.grossCents)}`}
-            {contract && " · contrato "}
-            {contract && <ContractStatusBadge s={contract.status} />}
-          </p>
-          <p className="max-w-md text-xs text-muted">Cliente, documentos, venda, contrato e vouchers ficaram registrados no painel de gestão.</p>
-          <Link href="/balcao" className={`${btn} mt-2 bg-brand-600 text-white hover:bg-brand-700`}>
-            <Plus className="h-4 w-4" /> Novo atendimento
-          </Link>
+          <h1 className="font-display text-xl font-semibold text-ink">Tudo confirmado e concluído</h1>
+          <ul className="space-y-1 text-sm text-slate-600">
+            <li>Cliente: {client.name}</li>
+            {sale && (
+              <li>
+                Venda {sale.code} confirmada · <span className="tabular">{formatBRL(sale.grossCents)}</span>
+              </li>
+            )}
+            {contract &&
+              (d.flow.contractSent && contract.status === "AGUARDANDO_ENVIO" ? (
+                <li>Contrato emitido e enviado ao cliente</li>
+              ) : (
+                <li>
+                  Contrato <ContractStatusBadge s={contract.status} />
+                </li>
+              ))}
+          </ul>
+          <p className="max-w-md text-xs text-muted">Tudo ficou registrado no painel de gestão{d.flow.fredyCardId || sale?.externalRef?.startsWith("fredy:") ? " e o card do Frédy recebeu a anotação de concluído" : ""}.</p>
+          <AutoClose saleCode={sale?.code ?? null} />
         </div>
       </Card>
     );

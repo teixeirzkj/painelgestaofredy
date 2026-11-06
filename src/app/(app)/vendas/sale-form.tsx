@@ -606,15 +606,15 @@ export function SaleForm({
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Valor do produto (tarifa)" required error={err(`items.${idx}.priceCents`)}>
+                    <Field label="Valor vendido ao cliente (R$)" required error={err(`items.${idx}.priceCents`)} hint="quanto o cliente paga por este produto">
                       <MoneyInput value={i.priceCents} onChange={(v) => updateItem(i.uid, { priceCents: v })} />
                     </Field>
                     {i.commercialModel === "COMISSAO" ? (
-                      <Field label="Comissão do fornecedor" error={err(`items.${idx}.supplierCommissionCents`)} hint={rule && i.autoRule ? `regra: ${formatPercentBps(rule.commissionBps)}${rule.description ? ` (${rule.description})` : ""}` : undefined}>
+                      <Field label="Comissão do fornecedor para a agência (R$)" error={err(`items.${idx}.supplierCommissionCents`)} hint={rule && i.autoRule ? `regra do fornecedor: ${formatPercentBps(rule.commissionBps)}${rule.description ? ` (${rule.description})` : ""}` : `o que o fornecedor paga à agência${i.priceCents > 0 ? ` · ${formatPercentBps(Math.round((i.supplierCommissionCents * 10000) / i.priceCents))} do valor vendido` : ""}`}>
                         <MoneyInput value={i.supplierCommissionCents} onChange={(v) => updateItem(i.uid, { supplierCommissionCents: v, autoRule: false })} />
                       </Field>
                     ) : (
-                      <Field label="Custo / repasse" error={err(`items.${idx}.costCents`)}>
+                      <Field label="Custo do fornecedor (R$)" error={err(`items.${idx}.costCents`)} hint={`o que a agência paga ao fornecedor${i.priceCents > 0 ? ` · lucro da agência: ${formatBRL(i.priceCents - i.costCents)}` : ""}`}>
                         <MoneyInput value={i.costCents} onChange={(v) => updateItem(i.uid, { costCents: v })} />
                       </Field>
                     )}
@@ -626,13 +626,13 @@ export function SaleForm({
                       {rule && i.autoRule && rule.overBps > 0 && <Badge tone="violet" className="ml-1">over automático</Badge>}
                     </summary>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      <Field label="Taxa RAV" hint="cobrada do cliente · receita da agência">
+                      <Field label="Taxa RAV (R$)" hint="cobrada do cliente · receita da agência">
                         <MoneyInput value={i.ravCents} onChange={(v) => updateItem(i.uid, { ravCents: v })} />
                       </Field>
-                      <Field label="Taxa DU" hint="cobrada do cliente · receita da agência">
+                      <Field label="Taxa DU (R$)" hint="cobrada do cliente · receita da agência">
                         <MoneyInput value={i.duCents} onChange={(v) => updateItem(i.uid, { duCents: v })} />
                       </Field>
-                      <Field label="Over / incentivo" hint={rule && i.autoRule ? `regra: ${formatPercentBps(rule.overBps)}` : "pago pelo fornecedor à agência"}>
+                      <Field label="Over / incentivo do fornecedor (R$)" hint={rule && i.autoRule ? `regra do fornecedor: ${formatPercentBps(rule.overBps)}` : "bônus que o fornecedor paga à agência"}>
                         <MoneyInput value={i.overCents} onChange={(v) => updateItem(i.uid, { overCents: v, autoRule: false })} />
                       </Field>
                       {i.commercialModel === "COMISSAO" ? (
@@ -666,15 +666,15 @@ export function SaleForm({
           </div>
         </Section>
 
-        <Section icon={Wallet} step={3} title="Valores e comissões" description="Taxa de serviço, descontos, comissão do vendedor e do intermediário.">
+        <Section icon={Wallet} step={3} title="Valores e comissões" description="Taxa de serviço e desconto do cliente, comissão do vendedor (quanto ele ganha) e do intermediário.">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Taxa de serviço da agência" hint="cobrada do cliente">
+            <Field label="Taxa de serviço da agência (R$)" hint="cobrada do cliente, além dos produtos">
               <MoneyInput value={fees} onChange={setFees} />
             </Field>
-            <Field label="Desconto concedido" error={err("discountCents")}>
+            <Field label="Desconto dado ao cliente (R$)" error={err("discountCents")} hint="sai do valor que o cliente paga">
               <MoneyInput value={discount} onChange={setDiscount} />
             </Field>
-            <Field label="Comissão do vendedor">
+            <Field label="Comissão do vendedor: como calcular" hint="é o que o vendedor ganha nesta venda">
               <Select
                 value={commission.mode}
                 onChange={(e) => {
@@ -687,11 +687,11 @@ export function SaleForm({
               </Select>
             </Field>
             {commission.mode === "VALOR" ? (
-              <Field label="Valor da comissão">
+              <Field label="Comissão do vendedor (R$)">
                 <MoneyInput value={commission.amountCents} onChange={(v) => setCommission({ mode: "VALOR", amountCents: v })} />
               </Field>
             ) : (
-              <Field label="Percentual" hint={`= ${formatBRL(totals.sellerCommissionCents)}`}>
+              <Field label="% do vendedor sobre o lucro" hint={`= ${formatBRL(totals.sellerCommissionCents)} para o vendedor`}>
                 <div className="relative">
                   <Input type="number" min={0} max={100} step={0.5} value={commission.bps / 100} onChange={(e) => setCommission({ mode: "PERCENTUAL", bps: Math.round(Number(e.target.value) * 100) })} className="pr-8 text-right" />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">%</span>
@@ -709,7 +709,7 @@ export function SaleForm({
               </Select>
             </Field>
             {g.intermediaryId && (
-              <Field label="Comissão do intermediário" hint="gera uma conta a pagar ao parceiro">
+              <Field label="Comissão do intermediário / parceiro (R$)" hint="o que a agência paga ao parceiro (vira conta a pagar)">
                 <MoneyInput value={interComm} onChange={setInterComm} />
               </Field>
             )}

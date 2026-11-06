@@ -19,6 +19,9 @@ describe("etapas do atendimento da venda rápida", () => {
     expect(flowSteps({ ...base, saleStatus: "CONFIRMADA", contractStatus: "ENVIADO" }).current).toBe(7);
     expect(flowSteps({ ...base, saleStatus: "CONFIRMADA", contractStatus: "AGUARDANDO_ENVIO", contractSent: true }).current).toBe(7);
   });
+  it("venda alterada depois da emissão: volta para emitir o contrato de novo", () => {
+    expect(flowSteps({ ...base, saleStatus: "CONFIRMADA", contractStatus: "AGUARDANDO_ENVIO", contractOutdated: true }).current).toBe(5);
+  });
   it("sem permissão de contrato, as etapas 5 e 6 não travam", () => {
     expect(flowSteps({ ...base, canContract: false, saleStatus: "CONFIRMADA" }).current).toBe(7);
   });

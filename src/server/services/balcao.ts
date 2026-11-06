@@ -9,6 +9,8 @@ import { assertCan, can, type Ctx } from "@/server/context";
 import { AppError } from "@/server/errors";
 import { clientScope } from "./registry";
 import { saleScope } from "./sales";
+import { contractPdf } from "./contract-pdf";
+import { noteOnCard, sendFileToClientChat } from "./fredy";
 
 export const BALCAO_STEPS = ["Card do Frédy", "Cliente", "Documentos", "Venda", "Contrato", "Enviar contrato", "Vouchers"] as const;
 export const DONE_STEP = BALCAO_STEPS.length + 1;
@@ -30,13 +32,15 @@ type StepInput = {
   clientComplete: boolean;
   saleStatus: string | null;
   contractStatus: string | null;
+  /** venda alterada depois da emissão: o contrato precisa ser emitido de novo */
+  contractOutdated?: boolean;
   canContract: boolean;
 };
 
 /** Etapas feitas (1 a 7) e a etapa atual (8 = atendimento concluído). */
 export function flowSteps(f: StepInput) {
   const saleOk = !!f.saleStatus && f.saleStatus !== "ORCAMENTO" && f.saleStatus !== "CANCELADA";
-  const issued = ISSUED.includes(f.contractStatus ?? "");
+  const issued = ISSUED.includes(f.contractStatus ?? "") && !(f.contractOutdated && f.contractStatus === "AGUARDANDO_ENVIO");
   const done = [
     f.cardDone,
     f.dataChecked && f.clientComplete,
@@ -112,7 +116,7 @@ export async function loadFlow(ctx: Ctx, id: string) {
           tripStart: true,
           grossCents: true,
           externalRef: true,
-          contracts: { select: { id: true, status: true }, orderBy: { createdAt: "desc" }, take: 1 },
+          contracts: { select: { id: true, status: true, outdated: true }, orderBy: { createdAt: "desc" }, take: 1 },
           attachments: { orderBy: { createdAt: "desc" }, select: { id: true, fileName: true, mimeType: true, sizeBytes: true, kind: true, createdAt: true } },
         },
       })
@@ -124,6 +128,7 @@ export async function loadFlow(ctx: Ctx, id: string) {
     clientComplete: missing.length === 0,
     saleStatus: sale?.status ?? null,
     contractStatus: sale?.contracts[0]?.status ?? null,
+    contractOutdated: sale?.contracts[0]?.outdated ?? false,
     canContract,
   });
   // rascunhos do cliente que podem ser esta venda (ex.: o que chegou do Frédy quando o card virou ganho)
@@ -154,6 +159,12 @@ export async function markFlow(ctx: Ctx, id: string, mark: FlowMark) {
   } else {
     if (!d.done.slice(0, 6).every(Boolean)) throw new AppError("Ainda há etapas obrigatórias pendentes.");
     await prisma.balcaoFlow.update({ where: { id }, data: { finishedAt: new Date() } });
+    // avisa no card do Frédy que está tudo feito (se a anotação falhar, o atendimento continua concluído)
+    const card = d.flow.fredyCardId ?? (d.sale?.externalRef?.startsWith("fredy:") ? d.sale.externalRef.slice(6) : null);
+    if (card && d.sale) {
+      const c = d.contract?.status === "ASSINADO" ? "assinado" : "emitido e enviado ao cliente";
+      await noteOnCard(ctx.companyId, card, `Atendimento concluído na venda rápida por ${ctx.userName}: venda ${d.sale.code} confirmada, contrato ${c}.`).catch(() => false);
+    }
   }
 }
 
@@ -180,7 +191,7 @@ export async function listOpenFlows(ctx: Ctx) {
     take: 20,
     include: {
       client: { select: { name: true, document: true, street: true } },
-      sale: { select: { code: true, status: true, contracts: { select: { status: true }, orderBy: { createdAt: "desc" }, take: 1 } } },
+      sale: { select: { code: true, status: true, contracts: { select: { status: true, outdated: true }, orderBy: { createdAt: "desc" }, take: 1 } } },
     },
   });
   const canContract = can(ctx, "contracts.manage");
@@ -190,8 +201,32 @@ export async function listOpenFlows(ctx: Ctx) {
       clientComplete: clientMissing(f.client).length === 0,
       saleStatus: f.sale?.status ?? null,
       contractStatus: f.sale?.contracts[0]?.status ?? null,
+      contractOutdated: f.sale?.contracts[0]?.outdated ?? false,
       canContract,
     });
     return { id: f.id, clientName: f.client.name, saleCode: f.sale?.code ?? null, current, updatedAt: f.updatedAt };
   });
+}
+
+/** Envia o PDF do contrato na conversa aberta do cliente no Frédy e marca a etapa 6 como feita. */
+export async function sendContractViaFredy(ctx: Ctx, id: string) {
+  const d = await loadFlow(ctx, id);
+  if (!d.sale || !d.contract || !d.done[4]) throw new AppError("Emita o contrato antes de enviar.");
+  const { bytes, fileName } = await contractPdf(ctx, d.contract.id);
+  const first = d.client.name.split(/s+/)[0];
+  const r = await sendFileToClientChat(
+    ctx,
+    {
+      contactId: d.client.fredyContactId,
+      cardId: d.flow.fredyCardId ?? (d.sale.externalRef?.startsWith("fredy:") ? d.sale.externalRef.slice(6) : null),
+      phone: d.client.whatsapp || d.client.phone,
+    },
+    { bytes, name: fileName, mimeType: "application/pdf", type: "PDF" },
+    `Olá ${first}! Segue o contrato da sua viagem (${d.sale.code}). Qualquer dúvida, estou à disposição.`,
+  );
+  await prisma.$transaction([
+    prisma.balcaoFlow.update({ where: { id }, data: { contractSent: true } }),
+    ...(d.client.fredyContactId ? [] : [prisma.client.update({ where: { id: d.client.id }, data: { fredyContactId: r.contactId } })]),
+  ]);
+  return { previewUrl: r.previewUrl };
 }

@@ -19,7 +19,7 @@ import { createSale } from "./sales";
 import { PRODUCT_TYPES } from "@/lib/constants";
 import { formatBRL } from "@/lib/money";
 
-const BASES = { crm: "https://api.wts.chat/crm", core: "https://api.wts.chat/core" } as const;
+const BASES = { crm: "https://api.wts.chat/crm", core: "https://api.wts.chat/core", chat: "https://api.wts.chat/chat" } as const;
 const WEBHOOK_EVENTS = ["PANEL_CARD_UPDATE", "PANEL_CARD_STEP_CHANGE", "CONTACT_UPDATE"];
 const CARD_DETAILS = ["Contacts", "CustomFields", "StepTitle", "ResponsibleUser"];
 
@@ -502,4 +502,72 @@ export async function assertCardAvailable(ctx: Ctx, cardId: string) {
   const p = await fredyCardPrefill(ctx, cardId);
   if (p.existingSale) throw new AppError(`Este card já virou a venda ${p.existingSale.code}.`, "CONFLICT");
   return { meta: { origin: "FREDY" as const, externalRef: `fredy:${p.cardId}` }, contactId: p.contact?.id ?? null };
+}
+
+// ------------------------------ Envio de arquivo na conversa (venda rápida) ------------------------------
+type FredySession = { id: string; status: string; contactId?: string | null; previewUrl?: string | null; windowStatus?: string | null; lastInteractionDate?: string | null; updatedAt?: string | null };
+
+/** Contato do cliente no Frédy: o já ligado ao cadastro, o do card ou, por último, pelo telefone. */
+async function findContactId(token: string, who: { contactId?: string | null; cardId?: string | null; phone?: string | null }) {
+  if (who.contactId) return who.contactId;
+  if (who.cardId) {
+    const card = await wts<FredyCard>(token, "crm", `/v2/panel/card/${encodeURIComponent(who.cardId)}`, { query: { IncludeDetails: ["Contacts"] } }).catch(() => null);
+    const id = card?.contactIds?.[0] ?? card?.contacts?.[0]?.id;
+    if (id) return id;
+  }
+  const d = digits(who.phone);
+  if (d.length >= 10) {
+    for (const p of [d.length <= 11 ? `55${d}` : d, d.length <= 11 ? `+55${d}` : `+${d}`]) {
+      const c = await wts<FredyContact>(token, "core", `/v1/contact/phonenumber/${encodeURIComponent(p)}`).catch(() => null);
+      if (c?.id) return c.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Manda um arquivo (ex.: o PDF do contrato) na conversa aberta do cliente no Frédy.
+ * Pelas regras do WhatsApp, só dá para mandar arquivo dentro de um atendimento em andamento; sem ele, avisa o atendente.
+ */
+export async function sendFileToClientChat(
+  ctx: Ctx,
+  who: { contactId?: string | null; cardId?: string | null; phone?: string | null },
+  file: { bytes: Uint8Array; name: string; mimeType: string; type: "PDF" | "IMAGE" | "DOCUMENT" },
+  text: string,
+) {
+  const { token } = await tokenFor(ctx.companyId);
+  const contactId = await findContactId(token, who);
+  if (!contactId) throw new AppError("Não achei este cliente no Frédy. Confira o WhatsApp no cadastro ou abra pelo link do card.");
+  const sessions = await wts<Paged<FredySession>>(token, "chat", "/v2/session", {
+    query: { ContactId: contactId, Status: ["IN_PROGRESS", "PENDING", "STARTED"], PageSize: 20 },
+  });
+  const open = (sessions.items ?? []).sort((a, b) => String(b.lastInteractionDate ?? b.updatedAt ?? "").localeCompare(String(a.lastInteractionDate ?? a.updatedAt ?? "")))[0];
+  if (!open) throw new AppError("O cliente não tem atendimento aberto no Frédy. Abra a conversa com ele no Frédy e clique de novo.");
+  if (open.windowStatus === "EXPIRED") throw new AppError("A janela de 24 horas do WhatsApp com este cliente fechou. Peça para ele responder no Frédy e clique de novo.");
+
+  // upload: pega a URL temporária, envia o arquivo e registra (o ID serve para o envio)
+  const up = await wts<{ tempFileId: string; urlUpload: string }>(token, "core", "/v2/file", { query: { Type: file.type, Name: file.name, MimeType: file.mimeType } });
+  const put = await fetch(up.urlUpload, { method: "PUT", headers: { "Content-Type": file.mimeType }, body: Buffer.from(file.bytes), signal: AbortSignal.timeout(30000) }).catch(() => null);
+  if (!put || !put.ok) throw new AppError("Não foi possível enviar o arquivo para o Frédy agora. Tente de novo.");
+  const saved = await wts<{ id: string }>(token, "core", "/v2/file", { method: "POST", body: { tempFileId: up.tempFileId } });
+
+  const msg = await wts<{ id: string; status?: string; failureReason?: string | null }>(token, "chat", `/v1/session/${encodeURIComponent(open.id)}/message`, {
+    method: "POST",
+    body: { text, fileId: saved.id },
+  });
+  if (msg?.status === "FAILED") throw new AppError(`O Frédy não conseguiu entregar: ${msg.failureReason ?? "motivo não informado"}.`);
+  return { sessionId: open.id, previewUrl: open.previewUrl ?? null, contactId, status: msg?.status ?? null };
+}
+
+/** Anotação no card do Frédy (ex.: atendimento concluído na venda rápida). Falha não interrompe quem chamou. */
+export async function noteOnCard(companyId: string, cardId: string, text: string) {
+  const integ = await prisma.fredyIntegration.findUnique({ where: { companyId } });
+  if (!integ) return false;
+  await wts(decryptSecret(integ.tokenEnc), "crm", `/v1/panel/card/${encodeURIComponent(cardId)}/note`, { method: "POST", body: { text } });
+  return true;
+}
+
+/** Integração com o Frédy conectada (token salvo): libera o envio do contrato pela conversa. */
+export async function fredyConnected(companyId: string) {
+  return !!(await prisma.fredyIntegration.findUnique({ where: { companyId }, select: { id: true } }));
 }

@@ -171,6 +171,7 @@ export const markBalcaoFlowAction = async (id: string, mark: string) =>
     return balcao.markFlow(ctx, id, mark as balcao.FlowMark);
   });
 export const attachBalcaoSaleAction = async (id: string, saleId: string) => act((ctx) => balcao.attachSale(ctx, id, saleId), "Venda ligada ao atendimento.");
+export const sendBalcaoContractAction = async (id: string) => act((ctx) => balcao.sendContractViaFredy(ctx, id), "Contrato enviado na conversa do cliente no Frédy.");
 export const discardBalcaoFlowAction = async (id: string) => act((ctx) => balcao.discardFlow(ctx, id), "Atendimento removido da lista.");
 
 // ------------------------------ Automações ------------------------------
