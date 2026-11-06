@@ -231,6 +231,7 @@ export function SaleForm({
   rules = [],
   excursions = [],
   fredyCardId,
+  balcaoFlowId,
   afterSaveHref,
 }: {
   initial: SaleFormInitial;
@@ -242,6 +243,8 @@ export function SaleForm({
   excursions?: Excursion[];
   /** venda feita a partir de um card do Frédy (tela do vendedor): fica ligada ao card */
   fredyCardId?: string | null;
+  /** venda lançada dentro de um atendimento da venda rápida: fica ligada a ele */
+  balcaoFlowId?: string | null;
   /** para onde ir depois de salvar; ":id" vira o id da venda */
   afterSaveHref?: string;
 }) {
@@ -420,7 +423,7 @@ export function SaleForm({
       passengers: passengers.filter((p) => p.name.trim()).map(({ uid: _u, ...p }) => ({ ...p, clientId: p.clientId || null })),
       confirm,
     };
-    const r = await run(() => (editing ? updateSaleAction(initial.id!, payload) : createSaleAction(payload, { fredyCardId })), {
+    const r = await run(() => (editing ? updateSaleAction(initial.id!, payload) : createSaleAction(payload, { fredyCardId, balcaoFlowId })), {
       refresh: false,
       onSuccess: (d) => router.push(afterSaveHref ? afterSaveHref.replace(":id", d.id) : `/vendas/${d.id}`),
     });

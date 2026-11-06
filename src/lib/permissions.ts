@@ -56,6 +56,8 @@ export const DEFAULT_PERMISSIONS: Record<Role, Set<Permission>> = {
     "suppliers.view",
     "contracts.manage",
   ]),
+  // só a venda rápida (popup): cadastra cliente, lança a venda e emite o contrato; não entra na gestão
+  ATENDENTE: new Set<Permission>(["sales.create", "clients.manage", "contracts.manage"]),
   FINANCEIRO: new Set<Permission>([
     "dashboard.view",
     "dashboard.financeiro",

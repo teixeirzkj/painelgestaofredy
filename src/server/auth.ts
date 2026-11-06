@@ -52,6 +52,7 @@ export const getContext = cache(async (): Promise<Ctx | null> => {
 export async function requirePageContext(permission?: Permission): Promise<Ctx> {
   const ctx = await getContext();
   if (!ctx) redirect("/login");
+  if (ctx.role === "ATENDENTE") redirect("/balcao"); // atendente não entra na gestão
   if (permission && !ctx.permissions.has(permission)) redirect("/?negado=1");
   return ctx;
 }

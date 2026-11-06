@@ -77,7 +77,7 @@ async function monthRealized(ctx: Ctx, month: string) {
 export async function getGoals(ctx: Ctx, month: string) {
   const [goals, sellers, suppliers, real] = await Promise.all([
     prisma.goal.findMany({ where: { companyId: ctx.companyId, month } }),
-    prisma.user.findMany({ where: { companyId: ctx.companyId, active: true, role: { in: ["VENDEDOR", "GESTOR", "ADMIN"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { companyId: ctx.companyId, active: true, role: { in: ["VENDEDOR", "ATENDENTE", "GESTOR", "ADMIN"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     monthRealized(ctx, month),
   ]);
@@ -101,7 +101,7 @@ export async function getGoals(ctx: Ctx, month: string) {
 export async function getRanking(ctx: Ctx, month: string) {
   const [real, users, goals] = await Promise.all([
     monthRealized(ctx, month),
-    prisma.user.findMany({ where: { companyId: ctx.companyId, role: { in: ["VENDEDOR", "GESTOR", "ADMIN"] } }, select: { id: true, name: true, active: true } }),
+    prisma.user.findMany({ where: { companyId: ctx.companyId, role: { in: ["VENDEDOR", "ATENDENTE", "GESTOR", "ADMIN"] } }, select: { id: true, name: true, active: true } }),
     prisma.goal.findMany({ where: { companyId: ctx.companyId, month, scope: "VENDEDOR" } }),
   ]);
   const showMargin = can(ctx, "sales.view_margin");

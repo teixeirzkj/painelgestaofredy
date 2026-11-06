@@ -30,7 +30,7 @@ export function QuickSaleLink({ base }: { base: string }) {
       <CardHeader
         title="Venda rápida (popup do vendedor)"
         icon={MonitorSmartphone}
-        description="Uma tela só com cliente, venda e contrato, sem o menu da gestão. O vendedor entra uma vez com o login dele e a tela fica aberta."
+        description="Passo a passo do atendimento em 7 etapas (card, cliente, documentos, venda, contrato, envio e vouchers), sem o menu da gestão. O atendente entra uma vez com o login dele e a tela fica aberta."
         action={
           <a href={url} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 hover:underline">
             Abrir <ExternalLink className="h-3.5 w-3.5" />
@@ -46,6 +46,7 @@ export function QuickSaleLink({ base }: { base: string }) {
         />
         <Row label="Abrir como janela popup (para um botão)" value={popup} hint="Comando para um botão ou link que abra a tela em uma janela separada." />
         <p className="text-[11px] text-muted">Também aceita ?nome=, ?telefone=, ?email= e ?cpf= para pré-preencher o cadastro do cliente.</p>
+        <p className="text-[11px] text-muted">Para quem só atende: crie o usuário em Configurações com o papel “Atendente (só venda rápida)”. Ele entra direto nesta tela, sem acesso à gestão, e cada atendimento volta na etapa em que parou.</p>
       </div>
     </Card>
   );

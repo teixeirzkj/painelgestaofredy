@@ -9,6 +9,7 @@ export const ROLES = labels({
   GESTOR: "Gestor",
   VENDEDOR: "Vendedor",
   FINANCEIRO: "Financeiro",
+  ATENDENTE: "Atendente (só venda rápida)",
 });
 export type Role = (typeof ROLES.values)[number];
 

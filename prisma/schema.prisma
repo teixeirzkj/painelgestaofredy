@@ -50,6 +50,7 @@ model Company {
 
   users              User[]
   rolePermissions    RolePermission[]
+  balcaoFlows        BalcaoFlow[]
   clients            Client[]
   passengers         Passenger[]
   suppliers          Supplier[]
@@ -166,6 +167,7 @@ model Client {
   credits     ClientCredit[]
   tasks       Task[]
   attachments Attachment[]
+  balcaoFlows BalcaoFlow[]
 
   @@unique([companyId, document])
   @@index([companyId, mondeId])
@@ -281,6 +283,7 @@ model Sale {
 
   attachments  Attachment[]
   editRequests EditRequest[]
+  balcaoFlows  BalcaoFlow[]
 
   @@unique([companyId, number])
   @@unique([companyId, code])
@@ -1009,4 +1012,30 @@ model MondeIntegration {
   lastImportAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+/// Atendimento na venda rápida (popup do atendente): guarda em que etapa cada cliente parou,
+/// para a tela voltar no mesmo ponto quando o atendente sair e entrar de novo.
+model BalcaoFlow {
+  id           String    @id @default(cuid())
+  companyId    String
+  userId       String // atendente que abriu
+  clientId     String
+  saleId       String?
+  fredyCardId  String? // card do Frédy de onde veio, quando aberto pelo link do card
+  cardDone     Boolean   @default(false) // etapa 1: card conferido e marcado como ganho no Frédy
+  dataChecked  Boolean   @default(false) // etapa 2: dados do cliente conferidos
+  docsDone     Boolean   @default(false) // etapa 3: documentos enviados ou pulados
+  contractSent Boolean   @default(false) // etapa 6: contrato enviado ao cliente
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  client  Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sale    Sale?   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, clientId])
+  @@index([companyId, fredyCardId])
+  @@index([companyId, userId, finishedAt])
 }

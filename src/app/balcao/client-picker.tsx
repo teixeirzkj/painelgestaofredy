@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { Search, UserPlus, UserCheck } from "lucide-react";
 import { Card, CardHeader, Input } from "@/components/ui";
 import { ClientForm } from "@/components/forms/client-form";
-import { searchClientsAction } from "@/app/actions";
+import { searchClientsAction, startBalcaoFlowAction } from "@/app/actions";
+import { toast } from "sonner";
 import { formatDocument } from "@/lib/utils";
 
 type Found = { id: string; name: string; document: string | null; whatsapp: string | null; email: string | null; reason?: string };
@@ -15,7 +16,12 @@ export function ClientPicker({ card, canCreate, matches, prefill }: { card: stri
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Found[]>([]);
   const [creating, setCreating] = useState(matches.length === 0);
-  const go = (id: string) => router.push(`/balcao?${new URLSearchParams({ ...(card ? { card } : {}), cliente: id })}`);
+  // abre (ou retoma) o atendimento do cliente: a tela passa a lembrar em que etapa ele está
+  const go = async (id: string) => {
+    const r = await startBalcaoFlowAction(id, card);
+    if (!r.ok) return toast.error(r.error);
+    router.push(`/balcao/a/${r.data.id}`);
+  };
 
   useEffect(() => {
     if (q.trim().length < 2) return setResults([]);

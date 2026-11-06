@@ -1,29 +1,38 @@
 import Link from "next/link";
-import { ArrowRight, UserRound } from "lucide-react";
+import { redirect } from "next/navigation";
+import { ArrowRight, History } from "lucide-react";
 import { prisma } from "@/server/db";
-import { can, today } from "@/server/context";
+import { can } from "@/server/context";
 import { clientScope } from "@/server/services/registry";
 import { fredyCardPrefill } from "@/server/services/fredy";
+import { BALCAO_STEPS, DONE_STEP, flowFromCard, listOpenFlows } from "@/server/services/balcao";
 import { AppError } from "@/server/errors";
 import { Card, CardHeader, Notice } from "@/components/ui";
-import { formatDocument, onlyDigits } from "@/lib/utils";
-import { str, type SearchParams } from "@/lib/params";
-import { EditClientButton } from "@/app/(app)/clientes/client-buttons";
-import { ClientDocuments } from "@/app/(app)/clientes/[id]/client-documents";
-import { saleScope } from "@/server/services/sales";
 import { formatBRL } from "@/lib/money";
-import { balcaoContext, carry, clientMissing, flowKeyFor } from "./shared";
-import { BalcaoGuide, GatedContinue, type GuideFacts } from "./guide";
+import { onlyDigits } from "@/lib/utils";
+import { str, type SearchParams } from "@/lib/params";
+import { balcaoContext, carry } from "./shared";
+import { BalcaoHeader, StepBox } from "./header";
 import { ClientPicker } from "./client-picker";
+import { DiscardFlowButton } from "./flow-buttons";
 
 /**
- * Etapa 1 da venda rápida: escolher ou cadastrar o cliente e anexar os documentos.
- * Aceita ?card=<id do card no Frédy> (pré-preenche pelo contato do card) ou ?nome=&telefone=&email=&cpf=.
+ * Venda rápida (popup do atendente): etapa 1 (card do Frédy) e etapa 2 (escolher ou cadastrar o cliente).
+ * Escolhido o cliente, abre-se o atendimento (/balcao/a/:id), que guarda em que etapa parou.
+ * Aceita ?card=<id do card no Frédy> e ?nome=&telefone=&email=&cpf= para pré-preencher.
  */
-export default async function BalcaoClientePage({ searchParams }: { searchParams: SearchParams }) {
+export default async function BalcaoInicioPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const card = str(sp, "card") ?? null;
-  const ctx = await balcaoContext(`/balcao${carry(card, { cliente: str(sp, "cliente"), nome: str(sp, "nome"), telefone: str(sp, "telefone"), email: str(sp, "email"), cpf: str(sp, "cpf") })}`);
+  const etapa = str(sp, "etapa") === "2" ? 2 : 1;
+  const keep = { nome: str(sp, "nome"), telefone: str(sp, "telefone"), email: str(sp, "email"), cpf: str(sp, "cpf") };
+  const ctx = await balcaoContext(`/balcao${carry(card, { etapa: etapa === 2 ? "2" : null, ...keep })}`);
+
+  // aberto pelo card: se o card já tem atendimento (ou venda), volta direto para a etapa em que parou
+  if (card) {
+    const flowId = await flowFromCard(ctx, card);
+    if (flowId) redirect(`/balcao/a/${flowId}`);
+  }
 
   let prefill: Awaited<ReturnType<typeof fredyCardPrefill>> | null = null;
   let cardError: string | null = null;
@@ -34,149 +43,130 @@ export default async function BalcaoClientePage({ searchParams }: { searchParams
       cardError = e instanceof AppError ? e.message : "Não foi possível ler o card do Frédy.";
     }
   }
-  const name = prefill?.contact?.name ?? str(sp, "nome") ?? "";
-  const email = (prefill?.contact?.email ?? str(sp, "email") ?? "").toLowerCase();
-  const phone = onlyDigits(prefill?.contact?.phone ?? str(sp, "telefone"));
-  const cpf = onlyDigits(str(sp, "cpf"));
 
-  // cliente escolhido
-  const clientId = str(sp, "cliente");
-  const selected = clientId
-    ? await prisma.client.findFirst({
-        where: { AND: [{ id: clientId }, clientScope(ctx)] },
-        include: { attachments: { orderBy: { createdAt: "desc" }, select: { id: true, kind: true, fileName: true, mimeType: true, docNumber: true, docExpiry: true, createdAt: true } } },
-      })
-    : null;
-
-  // sugestões pelo contato do card / dados do link
-  let matches: { id: string; name: string; document: string | null; whatsapp: string | null; email: string | null; reason: string }[] = [];
-  if (!selected) {
-    const or = [
-      ...(prefill?.contact?.id ? [{ fredyContactId: prefill.contact.id }] : []),
-      ...(cpf.length >= 11 ? [{ document: cpf }] : []),
-      ...(email ? [{ email }] : []),
-      ...(phone.length >= 8 ? [{ whatsapp: { contains: phone.slice(-4) } }, { phone: { contains: phone.slice(-4) } }] : []),
-    ];
-    if (or.length) {
-      const found = await prisma.client.findMany({ where: { AND: [clientScope(ctx), { archivedAt: null }, { OR: or }] }, take: 20, select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true, fredyContactId: true } });
-      matches = found
-        .map((c) => {
-          const reason =
-            prefill?.contact?.id && c.fredyContactId === prefill.contact.id
-              ? "mesmo contato do Frédy"
-              : cpf && c.document === cpf
-                ? "mesmo CPF"
-                : email && c.email === email
-                  ? "mesmo e-mail"
-                  : phone && [c.whatsapp, c.phone].some((p) => p && onlyDigits(p).slice(-8) === phone.slice(-8))
-                    ? "mesmo telefone"
-                    : "";
-          return { ...c, reason };
-        })
-        .filter((c) => c.reason);
-    }
-  }
-
-  const canManage = can(ctx, "clients.manage");
-  const flowKey = flowKeyFor(prefill ? card : null);
-  const missing = selected ? clientMissing(selected) : [];
-  const guide: GuideFacts = {
-    page: "cliente",
-    flowKey,
-    cardTitle: prefill?.title ?? null,
-    clientChosen: !!selected,
-    clientComplete: !!selected && missing.length === 0,
-    clientMissing: missing,
-    docs: selected?.attachments.length ?? 0,
-    saleExists: false,
-    saleConfirmed: false,
-    contractStatus: null,
-    canContract: can(ctx, "contracts.manage"),
-    attachments: 0,
-  };
-  // rascunhos do cliente (ex.: o que chegou do Frédy quando o card virou ganho): continuar por eles evita venda duplicada
-  const drafts = selected
-    ? await prisma.sale.findMany({
-        where: { ...saleScope(ctx), clientId: selected.id, status: "ORCAMENTO" },
-        select: { id: true, code: true, destination: true, origin: true, externalRef: true, grossCents: true },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-      })
-    : [];
-  const continueCls = "inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700";
-  return (
-    <div className="space-y-5">
-      <BalcaoGuide facts={guide} />
-      {cardError && <Notice tone="amber" title="Card do Frédy">{cardError} Você pode continuar normalmente: a venda só não ficará ligada ao card.</Notice>}
-      {prefill && (
-        <Notice title={`Card do Frédy: ${prefill.title}`}>
-          {prefill.existingSale ? (
-            <>
-              Este card já virou a venda {prefill.existingSale.code}.{" "}
-              <Link href={`/balcao/${prefill.existingSale.id}`} className="font-medium underline">
-                Abrir a venda
-              </Link>
-            </>
-          ) : (
-            <>Os dados do contato e do card já vêm preenchidos. Ao confirmar a venda, o card é marcado como ganho no Frédy com o valor final.</>
-          )}
-        </Notice>
-      )}
-
-      {selected ? (
-        <>
-          <Card>
-            <CardHeader
-              title={selected.name}
-              icon={UserRound}
-              description={[selected.document && formatDocument(selected.document), selected.whatsapp || selected.phone, selected.email].filter(Boolean).join(" · ") || "Cadastro sem documento e contato"}
-              action={
-                <div className="flex gap-2">
-                  <Link href={`/balcao${carry(card)}`} className="inline-flex h-9 items-center rounded-lg px-3 text-sm text-muted hover:bg-slate-100">
-                    Trocar cliente
-                  </Link>
-                  {canManage && <EditClientButton id={selected.id} initial={selected} />}
-                </div>
-              }
-            />
-            {(!selected.document || !selected.street) && (
-              <p className="border-t border-line bg-amber-50 px-5 py-2 text-xs text-amber-900">Para emitir o contrato, o cadastro precisa de CPF/CNPJ e endereço. Clique em Editar para completar.</p>
+  if (etapa === 1) {
+    const open = await listOpenFlows(ctx);
+    const next = `/balcao${carry(card, { etapa: "2", ...keep })}`;
+    return (
+      <>
+        <BalcaoHeader ctx={ctx} view={1} done={[]} />
+        <main className="mx-auto max-w-5xl space-y-5 px-4 py-6">
+          <StepBox
+            n={1}
+            title="Card do cliente no Frédy"
+            steps={[
+              "No Frédy, abra a conversa do cliente e encontre o card dele.",
+              "Confira se o card está preenchido: campos personalizados, anotação e descrição.",
+              <>
+                Marque o card como <strong>ganho</strong> (ou mova para venda fechada). Assim a venda vai para o painel de gestão.
+              </>,
+            ]}
+          >
+            {cardError && (
+              <div className="px-5 pt-4">
+                <Notice tone="amber" title="Card do Frédy">
+                  {cardError} Dá para seguir normalmente: a venda só não fica ligada ao card.
+                </Notice>
+              </div>
             )}
-          </Card>
-          <Card>
-            <CardHeader title="Documentos do cliente" description="Fotos do RG, CPF, CNH ou passaporte. No celular, o botão da câmera tira a foto na hora." />
-            <ClientDocuments clientId={selected.id} docs={selected.attachments} canManage={canManage} todayStr={today(ctx)} />
-          </Card>
-          {drafts.length > 0 && (
-            <Notice tone="amber" title="Este cliente já tem venda em rascunho">
-              <p>Se é esta venda, continue por ela em vez de lançar outra (a venda que chega do Frédy quando o card vira ganho fica aqui).</p>
-              <ul className="mt-2 space-y-1">
-                {drafts.map((d) => (
-                  <li key={d.id}>
-                    <Link href={`/balcao/${d.id}/editar`} className="font-medium underline">
-                      Continuar {d.code}
-                    </Link>{" "}
-                    · {d.destination ?? "sem destino"} · <span className="tabular">{formatBRL(d.grossCents)}</span>
-                    {d.externalRef?.startsWith("fredy:") && " · veio do Frédy"}
+            {prefill && (
+              <div className="px-5 pt-4">
+                <Notice title={`Card: ${prefill.title}`}>
+                  {[prefill.contact?.name, prefill.priceCents ? formatBRL(prefill.priceCents) : null, prefill.destination].filter(Boolean).join(" · ") || "Card sem contato e valor."}
+                </Notice>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-end gap-3 px-5 py-4">
+              <Link href={next} className="text-sm text-muted hover:text-ink hover:underline">
+                O cliente não veio pelo Frédy
+              </Link>
+              <Link href={next} className="inline-flex h-11 items-center gap-2 rounded-xl bg-brand-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700">
+                Já fiz, continuar <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+          </StepBox>
+
+          {open.length > 0 && (
+            <Card>
+              <CardHeader title="Atendimentos em andamento" icon={History} description="Continue de onde parou. A tela volta na mesma etapa." />
+              <ul className="divide-y divide-line border-t border-line">
+                {open.map((f) => (
+                  <li key={f.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-ink">{f.clientName}</span>
+                      <span className="block text-xs text-muted">
+                        {f.current >= DONE_STEP ? "Pronto para concluir" : `Parou na etapa ${f.current}: ${BALCAO_STEPS[f.current - 1]}`}
+                        {f.saleCode && ` · venda ${f.saleCode}`}
+                      </span>
+                    </span>
+                    <DiscardFlowButton id={f.id} confirmText={`Tirar o atendimento de ${f.clientName} da lista? O cliente e a venda continuam na gestão.`} />
+                    <Link href={`/balcao/a/${f.id}`} className="inline-flex h-9 items-center gap-1 rounded-lg border border-line bg-white px-3 text-sm font-medium hover:bg-slate-50">
+                      Continuar <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
                   </li>
                 ))}
               </ul>
-            </Notice>
+            </Card>
           )}
-          <div className="flex justify-end">
-            <GatedContinue flowKey={flowKey} href={`/balcao/venda${carry(card, { cliente: selected.id })}`} className={continueCls}>
-              Continuar: lançar a venda <ArrowRight className="h-4 w-4" />
-            </GatedContinue>
-          </div>
-        </>
-      ) : (
+        </main>
+      </>
+    );
+  }
+
+  // etapa 2: achar ou cadastrar o cliente
+  const name = prefill?.contact?.name ?? keep.nome ?? "";
+  const email = (prefill?.contact?.email ?? keep.email ?? "").toLowerCase();
+  const phone = onlyDigits(prefill?.contact?.phone ?? keep.telefone);
+  const cpf = onlyDigits(keep.cpf);
+  let matches: { id: string; name: string; document: string | null; whatsapp: string | null; email: string | null; reason: string }[] = [];
+  const or = [
+    ...(prefill?.contact?.id ? [{ fredyContactId: prefill.contact.id }] : []),
+    ...(cpf.length >= 11 ? [{ document: cpf }] : []),
+    ...(email ? [{ email }] : []),
+    ...(phone.length >= 8 ? [{ whatsapp: { contains: phone.slice(-4) } }, { phone: { contains: phone.slice(-4) } }] : []),
+  ];
+  if (or.length) {
+    const found = await prisma.client.findMany({ where: { AND: [clientScope(ctx), { archivedAt: null }, { OR: or }] }, take: 20, select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true, fredyContactId: true } });
+    matches = found
+      .map((c) => {
+        const reason =
+          prefill?.contact?.id && c.fredyContactId === prefill.contact.id
+            ? "mesmo contato do Frédy"
+            : cpf && c.document === cpf
+              ? "mesmo CPF"
+              : email && c.email === email
+                ? "mesmo e-mail"
+                : phone && [c.whatsapp, c.phone].some((p) => p && onlyDigits(p).slice(-8) === phone.slice(-8))
+                  ? "mesmo telefone"
+                  : "";
+        return { ...c, reason };
+      })
+      .filter((c) => c.reason);
+  }
+  return (
+    <>
+      <BalcaoHeader ctx={ctx} view={2} done={[true]} />
+      <main className="mx-auto max-w-5xl space-y-5 px-4 py-6">
+        <StepBox
+          n={2}
+          title="Cadastrar ou conferir o cliente"
+          steps={[
+            "Busque o cliente pelo nome, CPF ou telefone.",
+            "Se não achar, cadastre o cliente novo. Para o contrato precisa de CPF/CNPJ e endereço completo.",
+          ]}
+        />
         <ClientPicker
-          card={card}
-          canCreate={canManage}
+          card={prefill ? card : null}
+          canCreate={can(ctx, "clients.manage")}
           matches={matches}
           prefill={{ name, email, whatsapp: phone ? (phone.startsWith("55") && phone.length > 11 ? phone.slice(2) : phone) : "", document: cpf }}
         />
-      )}
-    </div>
+        <div>
+          <Link href={`/balcao${carry(card, keep)}`} className="text-sm text-muted hover:text-ink hover:underline">
+            ← Voltar para a etapa 1
+          </Link>
+        </div>
+      </main>
+    </>
   );
 }

@@ -32,6 +32,7 @@ import * as trips from "@/server/services/trips";
 import * as excursions from "@/server/services/excursions";
 import * as invoices from "@/server/services/invoices";
 import * as catalog from "@/server/services/catalog";
+import * as balcao from "@/server/services/balcao";
 import { assertCan } from "@/server/context";
 
 function act<T>(fn: (ctx: Awaited<ReturnType<typeof requireContext>>) => Promise<T>, message?: string): Promise<ActionResult<T>> {
@@ -79,7 +80,9 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
   await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
   const next = String(form.get("next") ?? "");
   // só caminhos internos (evita redirecionar para outro site)
-  redirect(next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/");
+  const safe = next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+  // atendente só usa a venda rápida
+  redirect(user.role === "ATENDENTE" && !safe.startsWith("/balcao") ? "/balcao" : safe);
 }
 
 export async function logoutAction() {
@@ -98,13 +101,14 @@ function dispatchSoon(companyId: string) {
 }
 
 // ------------------------------ Vendas ------------------------------
-export const createSaleAction = async (input: unknown, opts?: { fredyCardId?: string | null }) =>
+export const createSaleAction = async (input: unknown, opts?: { fredyCardId?: string | null; balcaoFlowId?: string | null }) =>
   act(async (ctx) => {
     dispatchSoon(ctx.companyId);
     // venda feita pela tela do vendedor a partir de um card: fica ligada ao card (a confirmação atualiza o card)
     const link = opts?.fredyCardId ? await fredy.assertCardAvailable(ctx, opts.fredyCardId) : null;
     const sale = await sales.createSale(ctx, input, link?.meta);
     if (link?.contactId) await prisma.client.updateMany({ where: { companyId: ctx.companyId, fredyContactId: null, sales: { some: { id: sale.id } } }, data: { fredyContactId: link.contactId } });
+    if (opts?.balcaoFlowId) await balcao.attachSale(ctx, opts.balcaoFlowId, sale.id);
     return sale;
   }, "Venda registrada.");
 export const updateSaleAction = async (id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.updateSale(ctx, id, input)), "Venda atualizada.");
@@ -157,6 +161,16 @@ export const prepareContractAction = async (saleId: string) =>
     if (!sale) throw new AppError("Venda não encontrada ou não confirmada.");
     await prisma.$transaction((tx) => contracts.prepareContractForSale(tx, ctx.companyId, saleId));
   }, "Contrato preparado.");
+
+// ------------------------------ Venda rápida (atendimento) ------------------------------
+export const startBalcaoFlowAction = async (clientId: string, card: string | null) => act((ctx) => balcao.startFlow(ctx, { clientId, card }));
+export const markBalcaoFlowAction = async (id: string, mark: string) =>
+  act((ctx) => {
+    if (!["data", "docs", "sent", "finish"].includes(mark)) throw new AppError("Etapa inválida.");
+    return balcao.markFlow(ctx, id, mark as balcao.FlowMark);
+  });
+export const attachBalcaoSaleAction = async (id: string, saleId: string) => act((ctx) => balcao.attachSale(ctx, id, saleId), "Venda ligada ao atendimento.");
+export const discardBalcaoFlowAction = async (id: string) => act((ctx) => balcao.discardFlow(ctx, id), "Atendimento removido da lista.");
 
 // ------------------------------ Automações ------------------------------
 export const setAutomationAction = async (key: string, enabled: boolean) => act((ctx) => automations.setAutomationEnabled(ctx, key, enabled), enabled ? "Automação ativada." : "Automação desativada.");

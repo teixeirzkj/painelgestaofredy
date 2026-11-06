@@ -136,7 +136,7 @@ export async function listAudit(ctx: Ctx, page = 1) {
 
 export async function sellerOptions(ctx: Ctx) {
   return prisma.user.findMany({
-    where: { companyId: ctx.companyId, active: true, role: { in: ["VENDEDOR", "GESTOR", "ADMIN"] } },
+    where: { companyId: ctx.companyId, active: true, role: { in: ["VENDEDOR", "ATENDENTE", "GESTOR", "ADMIN"] } },
     select: { id: true, name: true, commissionRateBps: true },
     orderBy: { name: "asc" },
   });
