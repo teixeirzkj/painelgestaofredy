@@ -8,10 +8,18 @@ import { clientSchema, supplierSchema } from "./schemas";
 import { textContains } from "./query";
 import { displayStatus } from "@/lib/finance";
 import { onlyDigits } from "@/lib/utils";
+import { clientIdentity, normalizeDocCode } from "@/lib/client-identity";
 import { saleScope } from "./sales";
 import { tripDates, tripStatus } from "./trips";
 
 // ------------------------------ Clientes ------------------------------
+
+/** Busca por passaporte ou RNE (estrangeiro), a partir de 4 caracteres. */
+export function docCodeFilters(q: string | undefined): Prisma.ClientWhereInput[] {
+  const code = normalizeDocCode(q);
+  if (!code || code.length < 4) return [];
+  return [{ passportNumber: textContains(code) }, { rne: textContains(code) }];
+}
 
 export function clientScope(ctx: Ctx): Prisma.ClientWhereInput {
   if (can(ctx, "clients.view_all")) return { companyId: ctx.companyId };
@@ -31,6 +39,7 @@ export async function listClients(ctx: Ctx, f: { q?: string; page?: number; arch
               { name: textContains(f.q) },
               { email: textContains(f.q) },
               ...(qDigits.length >= 3 ? [{ document: { contains: qDigits } }, { phone: { contains: qDigits } }, { whatsapp: { contains: qDigits } }] : []),
+              ...docCodeFilters(f.q),
             ],
           }
         : {},
@@ -64,18 +73,24 @@ export async function listClients(ctx: Ctx, f: { q?: string; page?: number; arch
 /** Busca rápida (autocomplete) para o formulário de venda. */
 export async function searchClients(ctx: Ctx, q: string) {
   const digits = onlyDigits(q);
-  return prisma.client.findMany({
+  const rows = await prisma.client.findMany({
     where: {
       AND: [
         clientScope(ctx),
         { archivedAt: null },
-        q ? { OR: [{ name: textContains(q) }, ...(digits.length >= 3 ? [{ document: { contains: digits } }, { whatsapp: { contains: digits } }, { phone: { contains: digits } }] : [])] } : {},
+        q ? { OR: [{ name: textContains(q) }, ...(digits.length >= 3 ? [{ document: { contains: digits } }, { whatsapp: { contains: digits } }, { phone: { contains: digits } }] : []), ...docCodeFilters(q)] } : {},
       ],
     },
-    select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true },
+    select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true, foreigner: true, passportNumber: true, rne: true, nationality: true },
     orderBy: { name: "asc" },
     take: 12,
   });
+  // passaporte e RNE não vão crus para o navegador: só o resumo mascarado (docHint)
+  return rows.map(({ passportNumber, rne, nationality, ...c }) => ({
+    ...c,
+    // sem CPF/CNPJ: "Passaporte nº ******456 (Argentina)"
+    docHint: c.document ? null : clientIdentity({ ...c, passportNumber, rne, nationality }, { mask: true }),
+  }));
 }
 
 export async function getClient(ctx: Ctx, id: string) {
@@ -104,7 +119,7 @@ export async function getClient(ctx: Ctx, id: string) {
         }),
     prisma.contract.findMany({
       where: { companyId: ctx.companyId, sale: { clientId: id, ...saleScope(ctx) } },
-      include: { sale: { select: { code: true } } },
+      include: { sale: { select: { code: true } }, trip: { select: { code: true } } },
     }),
     prisma.trip.findMany({
       where: { companyId: ctx.companyId, clientId: id },
@@ -150,10 +165,13 @@ export async function saveClient(ctx: Ctx, id: string | null, raw: unknown) {
       if (id) {
         const c = await tx.client.findFirst({ where: { AND: [{ id }, clientScope(ctx)] } });
         if (!c) throw new AppError("Cliente não encontrado.", "NOT_FOUND");
+        // só confere passaporte repetido quando ele mudou (cadastros antigos podem ter repetidos)
+        if (d.passportNumber && d.passportNumber !== normalizeDocCode(c.passportNumber)) await assertPassportFree(tx, ctx, d.passportNumber, id);
         await tx.client.update({ where: { id }, data: d });
         await audit(tx, ctx, "cliente.alterado", "Client", id);
         return { id, name: d.name };
       }
+      if (d.passportNumber) await assertPassportFree(tx, ctx, d.passportNumber, null);
       const c = await tx.client.create({ data: { ...d, companyId: ctx.companyId, ownerId: ctx.userId } });
       await audit(tx, ctx, "cliente.criado", "Client", c.id);
       return { id: c.id, name: c.name };
@@ -163,6 +181,14 @@ export async function saveClient(ctx: Ctx, id: string | null, raw: unknown) {
       throw new AppError("Já existe um cliente com este CPF/CNPJ.", "CONFLICT", [{ field: "document", message: "CPF/CNPJ já cadastrado." }]);
     throw e;
   }
+}
+
+async function assertPassportFree(tx: Prisma.TransactionClient, ctx: Ctx, passportNumber: string, selfId: string | null) {
+  const other = await tx.client.findFirst({
+    where: { companyId: ctx.companyId, passportNumber, ...(selfId ? { id: { not: selfId } } : {}) },
+    select: { id: true },
+  });
+  if (other) throw new AppError("Já existe um cliente com este passaporte.", "CONFLICT", [{ field: "passportNumber", message: "Passaporte já cadastrado." }]);
 }
 
 export async function archiveClient(ctx: Ctx, id: string, archived: boolean) {

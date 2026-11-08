@@ -6,12 +6,19 @@ import { clientScope, supplierOptions } from "@/server/services/registry";
 import { sellerOptions } from "@/server/services/settings";
 import { activeRules } from "@/server/services/catalog";
 import { excursionOptions } from "@/server/services/excursions";
-import type { CommercialModel } from "@/lib/constants";
+import { cardOptions } from "@/server/services/cards";
+import type { CommercialModel, SupplierPayment } from "@/lib/constants";
+import { clientDocHint, type IdentityInput } from "@/lib/client-identity";
 import type { SaleFormInitial } from "./sale-form";
 
+/** Só o que a tela da venda precisa; passaporte e RNE vão mascarados (docHint). */
+function clientRef(c: IdentityInput & { id: string; name: string; whatsapp: string | null }) {
+  return { id: c.id, name: c.name, document: c.document, whatsapp: c.whatsapp, docHint: c.document ? null : clientDocHint(c) };
+}
+
 async function common(ctx: Ctx) {
-  const [suppliers, sellers, rules, excursions] = await Promise.all([supplierOptions(ctx), sellerOptions(ctx), activeRules(ctx), excursionOptions(ctx)]);
-  return { suppliers, sellers, rules, excursions, canPickSeller: can(ctx, "sales.edit_all"), showMargin: can(ctx, "sales.view_margin") };
+  const [suppliers, sellers, rules, excursions, agencyCards] = await Promise.all([supplierOptions(ctx), sellerOptions(ctx), activeRules(ctx), excursionOptions(ctx), cardOptions(ctx)]);
+  return { suppliers, sellers, rules, excursions, agencyCards, canPickSeller: can(ctx, "sales.edit_all"), showMargin: can(ctx, "sales.view_margin") };
 }
 
 /** Dados do formulário para uma venda nova, com pré-preenchimento opcional (ex.: card do Frédy). */
@@ -22,11 +29,11 @@ export async function newSaleFormData(
   const [base, me, client] = await Promise.all([
     common(ctx),
     prisma.user.findUniqueOrThrow({ where: { id: ctx.userId }, select: { commissionRateBps: true } }),
-    pre.clientId ? prisma.client.findFirst({ where: { AND: [{ id: pre.clientId }, clientScope(ctx)] }, select: { id: true, name: true, document: true, whatsapp: true } }) : null,
+    pre.clientId ? prisma.client.findFirst({ where: { AND: [{ id: pre.clientId }, clientScope(ctx)] }, select: { id: true, name: true, document: true, whatsapp: true, foreigner: true, passportNumber: true, rne: true, nationality: true } }) : null,
   ]);
   const initial: SaleFormInitial = {
     saleDate: today(ctx),
-    client,
+    client: client && clientRef(client),
     sellerId: ctx.userId,
     destination: pre.destination ?? "",
     tripStart: pre.tripStart ?? "",
@@ -62,7 +69,7 @@ export async function editSaleFormData(ctx: Ctx, id: string) {
     code: sale.code,
     status: sale.status,
     saleDate: sale.saleDate,
-    client: sale.client,
+    client: clientRef(sale.client),
     sellerId: sale.sellerId,
     destination: sale.destination ?? "",
     tripStart: sale.tripStart ?? "",
@@ -94,6 +101,12 @@ export async function editSaleFormData(ctx: Ctx, id: string) {
       supplierCommissionCents: i.supplierCommissionCents,
       supplierDueDate: i.supplierDueDate ?? "",
       locator: i.locator ?? "",
+      supplierPayment: i.supplierPayment as SupplierPayment,
+      supplierPayMethod: i.supplierPayMethod ?? "",
+      supplierCardAccountId: i.supplierCardAccountId ?? "",
+      supplierCardInstallments: i.supplierCardInstallments,
+      supplierCardStartInstallment: i.supplierCardStartInstallment,
+      supplierCardFirstBillMonth: i.supplierCardFirstBillMonth ?? "",
     })),
     payments: sale.plan,
     passengers: sale.passengers.map((p) => ({

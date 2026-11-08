@@ -131,7 +131,7 @@ export default async function SellerDashboardPage({ searchParams }: { searchPara
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
         <TodoTabs
           tasks={d.todo.tasks.map((t) => ({ id: t.id, title: t.title, date: t.dueDate, href: "/equipe/tarefas" }))}
-          contracts={d.todo.contracts.map((c) => ({ id: c.id, title: `${c.sale.code} · ${c.sale.client.name}`, date: null, href: `/contratos/${c.id}` }))}
+          contracts={d.todo.contracts.map((c) => ({ id: c.id, title: `${c.trip ? `Viagem ${c.trip.code}` : c.sale.code} · ${c.sale.client.name}`, date: null, href: `/contratos/${c.id}` }))}
           credits={d.todo.credits.map((c) => ({ id: c.id, title: `${c.client.name} · ${formatBRL(c.amountCents)}`, date: c.expiresAt, href: "/creditos" }))}
           birthdays={d.todo.birthdays.map((b) => ({ id: b.id, title: b.name, date: `${wm.month}-${b.day}`, href: b.href ?? "/aniversariantes" }))}
         />

@@ -5,6 +5,7 @@ import { assertCan, can, today, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
 import { saleScope } from "./sales";
+import { effectiveContract, tripContractInclude } from "./contracts";
 import { clientScope } from "./registry";
 import { addDays, endOfMonth, isIsoDate } from "@/lib/dates";
 import { ratioBps, sum } from "@/lib/money";
@@ -225,6 +226,7 @@ export async function upcomingDepartures(ctx: Ctx, days: number) {
       passengers: { select: { id: true } },
       items: { select: { productType: true, locator: true, reservation: { select: { status: true } } } },
       contracts: { select: { status: true } },
+      trip: tripContractInclude({ status: true }),
       receivables: { where: { origin: "VENDA", status: { in: ["PENDENTE", "PARCIAL"] } }, select: { amountCents: true, settledCents: true } },
     },
     orderBy: { tripStart: "asc" },
@@ -236,7 +238,8 @@ export async function upcomingDepartures(ctx: Ctx, days: number) {
     if (s.items.some((i) => i.reservation?.status === "PENDENTE")) pending.push("reserva não confirmada");
     const open = sum(s.receivables.map((r) => r.amountCents - r.settledCents));
     if (open > 0) pending.push("saldo em aberto");
-    if (s.contracts[0] && s.contracts[0].status !== "ASSINADO") pending.push("contrato");
+    const contract = effectiveContract(s); // o próprio ou o contrato da viagem
+    if (contract && contract.status !== "ASSINADO") pending.push("contrato");
     if (s.client.passportExpiry && s.client.passportExpiry < addDays(s.tripStart!, 180) && s.items.some((i) => ["AEREO", "PACOTE", "CRUZEIRO"].includes(i.productType))) pending.push("passaporte");
     return { id: s.id, code: s.code, client: s.client, seller: s.seller.name, destination: s.destination, tripStart: s.tripStart!, tripEnd: s.tripEnd, passengerCount: s.passengerCount, daysLeft: Math.round((Date.parse(s.tripStart!) - Date.parse(t)) / 86400000), openCents: open, pending };
   });
@@ -254,7 +257,7 @@ export async function sellerDashboard(ctx: Ctx, sellerId: string, month: string)
     prisma.goal.findFirst({ where: { companyId: ctx.companyId, month, scope: "VENDEDOR", targetId: sellerId } }),
     getRanking(ctx, month),
     prisma.task.findMany({ where: { companyId: ctx.companyId, assigneeId: sellerId, status: { in: ["PENDENTE", "EM_ANDAMENTO"] } }, orderBy: { dueDate: "asc" }, take: 8 }),
-    prisma.contract.findMany({ where: { companyId: ctx.companyId, status: { in: ["NAO_GERADO", "EM_PREPARACAO", "AGUARDANDO_ENVIO", "ENVIADO"] }, sale: { sellerId, status: confirmed } }, include: { sale: { select: { code: true, client: { select: { name: true } } } } }, take: 8 }),
+    prisma.contract.findMany({ where: { companyId: ctx.companyId, status: { in: ["NAO_GERADO", "EM_PREPARACAO", "AGUARDANDO_ENVIO", "ENVIADO"] }, sale: { sellerId, status: confirmed } }, include: { sale: { select: { code: true, client: { select: { name: true } } } }, trip: { select: { code: true } } }, take: 8 }),
     prisma.clientCredit.findMany({ where: { companyId: ctx.companyId, status: "ABERTO", client: { ownerId: sellerId } }, include: { client: { select: { name: true } } }, take: 8 }),
     prisma.sale.findMany({ where: { companyId: ctx.companyId, sellerId, status: { not: "CANCELADA" } }, orderBy: { createdAt: "desc" }, take: 6, select: { id: true, code: true, saleDate: true, destination: true, grossCents: true, status: true, client: { select: { name: true } } } }),
     prisma.sale.findMany({ where: { companyId: ctx.companyId, sellerId, status: confirmed, tripStart: { gte: t, lte: addDays(t, 7) } }, orderBy: { tripStart: "asc" }, select: { id: true, code: true, destination: true, tripStart: true, client: { select: { name: true } } } }),

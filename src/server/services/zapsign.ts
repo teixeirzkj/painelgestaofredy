@@ -13,7 +13,7 @@ import { prisma } from "../db";
 import { assertCan, today, type Ctx } from "../context";
 import { audit } from "../audit";
 import { AppError } from "../errors";
-import { applySignatureCallback, getContract } from "./contracts";
+import { applySignatureCallback, assertCanChangeTripContract, contractLabel, getContract } from "./contracts";
 import { saveFile } from "../storage";
 import { publicBaseUrl } from "./fredy";
 import { formatBRL } from "@/lib/money";
@@ -100,8 +100,9 @@ export async function sendContractToZapSign(ctx: Ctx, contractId: string, raw: u
   assertCan(ctx, "contracts.manage");
   const opts = sendSchema.parse(raw ?? {});
   const c = await getContract(ctx, contractId);
+  assertCanChangeTripContract(ctx, c);
   if (c.status !== "AGUARDANDO_ENVIO") throw new AppError("Emita o contrato antes de enviar para assinatura.");
-  if (c.outdated) throw new AppError("A venda mudou depois da emissão. Atualize a prévia e emita de novo.");
+  if (c.outdated) throw new AppError("Os dados mudaram depois da emissão. Atualize a prévia e emita de novo.");
   if (!c.content) throw new AppError("Contrato sem conteúdo.");
   const company = await prisma.company.findUniqueOrThrow({ where: { id: ctx.companyId } });
   const cl = c.sale.client;
@@ -130,7 +131,7 @@ export async function sendContractToZapSign(ctx: Ctx, contractId: string, raw: u
   const doc = await zs<ZsDoc>("/docs/", {
     method: "POST",
     body: {
-      name: `Contrato ${c.sale.code} v${c.version} - ${cl.name}`.slice(0, 255),
+      name: `Contrato ${contractLabel(c)} v${c.version} - ${cl.name}`.slice(0, 255),
       markdown_text: contractToMarkdown(c.content),
       lang: "pt-br",
       brand_name: (company.tradeName || company.name).slice(0, 100),
@@ -138,7 +139,7 @@ export async function sendContractToZapSign(ctx: Ctx, contractId: string, raw: u
       signers,
       metadata: [
         { key: "companyId", value: company.id },
-        { key: "saleCode", value: c.sale.code },
+        { key: "saleCode", value: contractLabel(c) },
       ],
     },
   });
@@ -157,7 +158,7 @@ export async function sendContractToZapSign(ctx: Ctx, contractId: string, raw: u
           sourceKey: `assinatura:${doc.token}`,
           origin: "ASSINATURA",
           saleId: c.saleId,
-          description: `Assinatura online do contrato ${c.sale.code} (ZapSign)`,
+          description: `Assinatura online do contrato ${contractLabel(c)} (ZapSign)`,
           category: "SISTEMAS",
           amountCents: cost,
           dueDate: today(ctx),
@@ -179,17 +180,24 @@ export async function syncZapSignDocument(docToken: string) {
   if (req.status === "ASSINADO") return { found: true as const, status: "signed" };
   await applySignatureCallback({ companyId: req.companyId, contractId: req.contractId, externalId: docToken, provider: PROVIDER, event: "signed" });
   await prisma.signatureRequest.update({ where: { id: req.id }, data: { status: "ASSINADO", signedAt: new Date() } });
-  // arquiva o PDF assinado na venda (o link da ZapSign expira em 60 minutos)
+  // arquiva o PDF assinado na venda, ou na viagem se for o contrato da viagem (o link da ZapSign expira em 60 minutos)
   if (doc.signed_file) {
     try {
       const res = await fetch(doc.signed_file, { signal: AbortSignal.timeout(30000) });
       if (res.ok) {
         const bytes = Buffer.from(await res.arrayBuffer());
         const key = await saveFile(req.companyId, bytes, "pdf");
-        const sale = await prisma.sale.findUnique({ where: { id: req.saleId }, select: { code: true } });
-        await prisma.attachment.create({
-          data: { companyId: req.companyId, saleId: req.saleId, kind: "DOCUMENTO", fileName: `Contrato assinado ${sale?.code ?? ""}.pdf`.trim(), mimeType: "application/pdf", sizeBytes: bytes.length, storageKey: key },
-        });
+        const contract = await prisma.contract.findFirst({ where: { id: req.contractId, companyId: req.companyId }, select: { tripId: true, trip: { select: { code: true } } } });
+        if (contract?.tripId) {
+          await prisma.attachment.create({
+            data: { companyId: req.companyId, tripId: contract.tripId, kind: "DOCUMENTO", fileName: `Contrato assinado ${contract.trip?.code ?? ""}.pdf`.trim(), mimeType: "application/pdf", sizeBytes: bytes.length, storageKey: key },
+          });
+        } else {
+          const sale = await prisma.sale.findUnique({ where: { id: req.saleId }, select: { code: true } });
+          await prisma.attachment.create({
+            data: { companyId: req.companyId, saleId: req.saleId, kind: "DOCUMENTO", fileName: `Contrato assinado ${sale?.code ?? ""}.pdf`.trim(), mimeType: "application/pdf", sizeBytes: bytes.length, storageKey: key },
+          });
+        }
       }
     } catch (e) {
       console.error("zapsign: falha ao arquivar PDF assinado", e);

@@ -113,7 +113,8 @@ export const createSaleAction = async (input: unknown, opts?: { fredyCardId?: st
     return sale;
   }, "Venda registrada.");
 export const updateSaleAction = async (id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), sales.updateSale(ctx, id, input)), "Venda atualizada.");
-export const cancelSaleAction = async (id: string, reason: string) => act((ctx) => sales.cancelSale(ctx, id, reason), "Venda cancelada.");
+export const cancelSaleAction = async (id: string, reason: string, opts?: { reverseCardCharges?: boolean }) =>
+  act((ctx) => sales.cancelSale(ctx, id, reason, { reverseCardCharges: !!opts?.reverseCardCharges }), "Venda cancelada.");
 export const duplicateSaleAction = async (id: string) => act((ctx) => sales.duplicateSale(ctx, id), "Venda duplicada como rascunho.");
 export const updateReservationAction = async (id: string, data: { status: string; locator: string | null; notes: string | null }) =>
   act(async (ctx) => {
@@ -138,6 +139,7 @@ export const createPayableAction = async (input: unknown) => act((ctx) => financ
 export const updateEntryAction = async (kind: Kind, id: string, input: unknown) => act((ctx) => finance.updateEntry(ctx, kind, id, input), "Lançamento atualizado.");
 export const cancelEntryAction = async (kind: Kind, id: string) => act((ctx) => finance.cancelEntry(ctx, kind, id), "Lançamento cancelado.");
 export const settleEntryAction = async (kind: Kind, id: string, input: unknown) => act((ctx) => (dispatchSoon(ctx.companyId), finance.settleEntry(ctx, kind, id, input)), "Baixa registrada.");
+export const linkPayableToCardAction = async (id: string, input: unknown) => act((ctx) => finance.linkPayableToCard(ctx, id, input), "Conta ligada ao cartão.");
 export const reverseSettlementAction = async (id: string, reason: string) => act((ctx) => finance.reverseSettlement(ctx, id, reason), "Baixa estornada.");
 export const saveAccountAction = async (id: string | null, input: unknown) => act((ctx) => finance.saveAccount(ctx, id, input), "Conta salva.");
 export const setAccountActiveAction = async (id: string, active: boolean) => act((ctx) => finance.setAccountActive(ctx, id, active), "Conta atualizada.");
@@ -148,10 +150,12 @@ export const matchStatementAction = async (lineId: string, settlementId: string)
 export const setStatementStatusAction = async (lineId: string, status: "IGNORADO" | "PENDENTE") => act((ctx) => reconciliation.setStatementLineStatus(ctx, lineId, status));
 
 // ------------------------------ Contratos ------------------------------
-export const refreshContractAction = async (id: string) => act((ctx) => contracts.refreshContract(ctx, id), "Prévia atualizada com os dados da venda.");
+export const refreshContractAction = async (id: string) => act((ctx) => contracts.refreshContract(ctx, id), "Prévia atualizada com os dados atuais.");
 export const issueContractAction = async (id: string) => act((ctx) => contracts.issueContract(ctx, id), "Contrato emitido.");
 export const cancelContractAction = async (id: string) => act((ctx) => contracts.cancelContract(ctx, id), "Contrato cancelado.");
 export const reopenContractAction = async (id: string) => act((ctx) => contracts.reopenContract(ctx, id), "Contrato reaberto para nova versão.");
+export const generateTripContractAction = async (tripId: string) => act((ctx) => contracts.generateTripContract(ctx, tripId), "Contrato da viagem gerado. Confira a prévia e emita.");
+export const splitTripContractAction = async (id: string) => act((ctx) => contracts.splitTripContract(ctx, id), "Contrato separado por venda.");
 export const saveTemplateAction = async (id: string | null, input: unknown) => act((ctx) => contracts.saveTemplate(ctx, id, input), "Modelo salvo.");
 export const createSuggestedTemplatesAction = async () => act((ctx) => contracts.createSuggestedTemplates(ctx), "Modelos sugeridos criados. Revise o texto com o jurídico da agência.");
 export const deleteClientDocumentAction = async (id: string) => act((ctx) => finance.deleteClientDocument(ctx, id), "Documento removido.");
@@ -160,7 +164,8 @@ export const prepareContractAction = async (saleId: string) =>
     assertCan(ctx, "contracts.manage");
     const sale = await prisma.sale.findFirst({ where: { id: saleId, ...sales.saleScope(ctx), status: { in: ["CONFIRMADA", "CONCLUIDA"] } } });
     if (!sale) throw new AppError("Venda não encontrada ou não confirmada.");
-    await prisma.$transaction((tx) => contracts.prepareContractForSale(tx, ctx.companyId, saleId));
+    // pedido na mão: funciona mesmo com a automação "contrato ao confirmar" desligada
+    await prisma.$transaction((tx) => contracts.prepareContractForSale(tx, ctx.companyId, saleId, { force: true, ctx }));
   }, "Contrato preparado.");
 
 // ------------------------------ Venda rápida (atendimento) ------------------------------

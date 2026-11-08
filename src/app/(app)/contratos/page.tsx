@@ -66,18 +66,18 @@ export default async function ContractsPage({ searchParams }: { searchParams: Se
                   <tr key={c.id} className="hover:bg-slate-50/60">
                     <Td>
                       <Link href={`/contratos/${c.id}`} className="font-medium text-brand-700 hover:underline">
-                        {c.sale.code}
+                        {c.trip ? `Viagem ${c.trip.code}` : c.sale.code}
                       </Link>
                     </Td>
                     <Td className="max-w-48 truncate">{c.sale.client.name}</Td>
-                    <Td className="text-slate-600">{PRODUCT_TYPES.label(c.sale.mainProductType)}</Td>
+                    <Td className="text-slate-600">{c.trip ? "Vários (viagem)" : PRODUCT_TYPES.label(c.sale.mainProductType)}</Td>
                     <Td className="text-slate-600">{c.template?.name ?? "—"}</Td>
                     <Td>{c.version || "—"}</Td>
                     <Td className="text-slate-600">{formatDateTime(c.updatedAt, ctx.timezone)}</Td>
                     <Td>
                       <ContractStatusBadge s={c.status} />
                       {missing.length > 0 && c.status === "EM_PREPARACAO" && <p className="mt-0.5 text-xs text-amber-700">{missing.length} dado(s) pendente(s)</p>}
-                      {c.outdated && <p className="mt-0.5 text-xs text-amber-700">Venda alterada após emissão</p>}
+                      {c.outdated && <p className="mt-0.5 text-xs text-amber-700">{c.trip ? "Viagem alterada após emissão" : "Venda alterada após emissão"}</p>}
                     </Td>
                   </tr>
                 );

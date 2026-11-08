@@ -68,7 +68,7 @@ export function ClientDocuments({ clientId, docs, canManage, todayStr }: { clien
       }}
     >
       {docs.length === 0 ? (
-        <p className="px-5 py-5 text-sm text-muted">Nenhum documento enviado. Envie as fotos do RG, CPF, CNH ou passaporte do cliente.</p>
+        <p className="px-5 py-5 text-sm text-muted">Nenhum documento enviado. Envie as fotos do RG, CPF, CNH, passaporte ou RNE/RNM do cliente.</p>
       ) : (
         <ul className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-3 lg:grid-cols-4">
           {docs.map((d) => {

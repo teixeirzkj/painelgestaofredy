@@ -57,10 +57,37 @@ export const PAYMENT_METHODS = labels({
   CARTAO_DEBITO: "Cartão de débito",
   BOLETO: "Boleto",
   TRANSFERENCIA: "Transferência",
+  DEBITO_CONTA: "Débito em conta corrente",
   DINHEIRO: "Dinheiro",
   OUTRO: "Outro",
 });
 export type PaymentMethod = (typeof PAYMENT_METHODS.values)[number];
+
+/** Como a agência paga o fornecedor de cada produto da venda. */
+export const SUPPLIER_PAYMENTS = labels({
+  CLIENTE_DIRETO: "O cliente paga direto ao fornecedor",
+  FATURADO: "A agência paga depois (faturado / boleto)",
+  CARTAO_AGENCIA: "A agência paga com o cartão de crédito da agência",
+  A_VISTA: "A agência paga à vista (pix, transferência, dinheiro ou débito)",
+});
+export type SupplierPayment = (typeof SUPPLIER_PAYMENTS.values)[number];
+
+export const SUPPLIER_PAYMENT_HELP: Record<SupplierPayment, string> = {
+  CLIENTE_DIRETO: "O cliente paga no sistema do fornecedor e a agência recebe só a comissão depois.",
+  FATURADO: "O cliente paga a agência e a agência paga o fornecedor no vencimento. Vira uma conta a pagar.",
+  CARTAO_AGENCIA: "A conta do fornecedor já nasce paga e o valor entra na fatura do cartão escolhido.",
+  A_VISTA: "Vira uma conta a pagar com a forma escolhida; o financeiro dá a baixa na conta bancária usada.",
+};
+
+/** Formas de pagar o fornecedor à vista (saem da lista geral de formas de pagamento). */
+export const SUPPLIER_CASH_METHODS = ["PIX", "TRANSFERENCIA", "DINHEIRO", "CARTAO_DEBITO", "DEBITO_CONTA"] as const satisfies readonly PaymentMethod[];
+export type SupplierCashMethod = (typeof SUPPLIER_CASH_METHODS)[number];
+
+/** Como contar a receita quando a agência paga o fornecedor (o cliente-direto é sempre Comissão). */
+export const AGENCY_REVENUE_MODELS = labels({
+  INTERMEDIACAO: "Intermediação (padrão)",
+  REVENDA: "Revenda (a agência compra e revende)",
+});
 
 export const ENTRY_STATUS = labels({
   PENDENTE: "Pendente",
@@ -177,6 +204,12 @@ export const INVOICE_STATUS = labels({
   CANCELADA: "Cancelada",
 });
 
+/** Sexo do cliente (campo do Monde). Vazio = não informado. */
+export const GENDERS = labels({
+  F: "Feminino",
+  M: "Masculino",
+});
+
 export const CLIENT_DOC_KINDS = labels({
   RG: "RG",
   CPF_DOC: "CPF",
@@ -185,6 +218,7 @@ export const CLIENT_DOC_KINDS = labels({
   VISTO: "Visto",
   CERTIDAO: "Certidão de nascimento",
   COMPROVANTE_RESIDENCIA: "Comprovante de residência",
+  RNE: "RNE / RNM",
   OUTRO_DOC: "Outro documento",
 });
 
@@ -304,7 +338,7 @@ const AUDIT_ENTITIES: Record<string, string> = {
   contrato: "Contrato", modelo: "Modelo de contrato", usuario: "Usuário", agencia: "Agência", conta: "Conta", fatura: "Fatura de fornecedor",
   viagem: "Viagem", excursao: "Excursão", credito: "Crédito", meta: "Meta", tarefa: "Tarefa", repasse: "Repasse", categoria: "Categoria",
   taxa_cartao: "Taxa de cartão", centro_custo: "Centro de custo", regra_comissao: "Regra de comissão", anexo: "Anexo", api: "API",
-  orcamento: "Orçamento", transferencia: "Transferência", automacao: "Automação", permissao: "Permissão", conciliacao: "Conciliação",
+  orcamento: "Orçamento", transferencia: "Transferência", automacao: "Automação", permissao: "Permissão", conciliacao: "Conciliação", cartao: "Cartão da agência",
 };
 export function auditActionLabel(action: string): string {
   const [entity, ...rest] = action.split(".");

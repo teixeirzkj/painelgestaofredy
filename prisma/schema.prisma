@@ -137,6 +137,10 @@ model Client {
   rg               String?
   passportNumber   String? // dado sensível: opcional, exibido mascarado
   passportExpiry   String?
+  foreigner        Boolean   @default(false) // estrangeiro: passaporte ou RNE substituem o CPF
+  nationality      String?
+  rne              String? // RNE/RNM/CRNM, dado sensível, exibido mascarado
+  gender           String? // F | M
   specialNeeds     String? // necessidades especiais/restrições relevantes para a viagem
   phone            String?
   whatsapp         String?
@@ -172,6 +176,7 @@ model Client {
   @@unique([companyId, document])
   @@index([companyId, mondeId])
   @@index([companyId, name])
+  @@index([companyId, passportNumber])
 }
 
 model Passenger {
@@ -294,28 +299,35 @@ model Sale {
 }
 
 model SaleItem {
-  id                      String    @id @default(cuid())
-  companyId               String
-  company                 Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  saleId                  String
-  sale                    Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  productType             String // AEREO | HOTEL | PACOTE | CRUZEIRO | SEGURO | PASSEIO | TRANSFER | OUTROS
-  description             String?
-  supplierId              String?
-  supplier                Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  commercialModel         String // INTERMEDIACAO | REVENDA | COMISSAO
-  priceCents              Int // valor vendido ao cliente
-  costCents               Int       @default(0) // custo/repasse ao fornecedor (INTERMEDIACAO/REVENDA)
-  supplierCommissionCents Int       @default(0) // comissão paga pelo fornecedor (modelo COMISSAO)
-  operatorId              String? // operadora/consolidadora que fatura o produto (quando diferente do fornecedor)
-  operator                Supplier? @relation("ItemOperator", fields: [operatorId], references: [id], onDelete: SetNull)
-  ravCents                Int       @default(0) // taxa RAV cobrada do cliente (receita da agência)
-  duCents                 Int       @default(0) // taxa DU cobrada do cliente (receita da agência)
-  overCents               Int       @default(0) // incentivo (over) pago pelo fornecedor
-  cardFeeCents            Int       @default(0) // taxa CC RAV/DU retida pelo fornecedor (cliente pagou direto no cartão)
-  supplierDueDate         String? // vencimento do repasse / recebimento da comissão
-  locator                 String?
-  sortOrder               Int       @default(0)
+  id                           String            @id @default(cuid())
+  companyId                    String
+  company                      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId                       String
+  sale                         Sale              @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productType                  String // AEREO | HOTEL | PACOTE | CRUZEIRO | SEGURO | PASSEIO | TRANSFER | OUTROS
+  description                  String?
+  supplierId                   String?
+  supplier                     Supplier?         @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  commercialModel              String // INTERMEDIACAO | REVENDA | COMISSAO
+  priceCents                   Int // valor vendido ao cliente
+  costCents                    Int               @default(0) // custo/repasse ao fornecedor (INTERMEDIACAO/REVENDA)
+  supplierCommissionCents      Int               @default(0) // comissão paga pelo fornecedor (modelo COMISSAO)
+  operatorId                   String? // operadora/consolidadora que fatura o produto (quando diferente do fornecedor)
+  operator                     Supplier?         @relation("ItemOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+  ravCents                     Int               @default(0) // taxa RAV cobrada do cliente (receita da agência)
+  duCents                      Int               @default(0) // taxa DU cobrada do cliente (receita da agência)
+  overCents                    Int               @default(0) // incentivo (over) pago pelo fornecedor
+  cardFeeCents                 Int               @default(0) // taxa CC RAV/DU retida pelo fornecedor (cliente pagou direto no cartão)
+  supplierDueDate              String? // vencimento do repasse / recebimento da comissão; no cartão da agência é a data da compra; à vista, a data do pagamento
+  supplierPayment              String            @default("FATURADO") // como a agência paga o fornecedor: CLIENTE_DIRETO | FATURADO | CARTAO_AGENCIA | A_VISTA
+  supplierPayMethod            String? // A_VISTA: PIX | TRANSFERENCIA | DINHEIRO | CARTAO_DEBITO | DEBITO_CONTA
+  supplierCardAccountId        String? // CARTAO_AGENCIA: cartão de crédito da agência usado
+  supplierCardAccount          FinancialAccount? @relation("SaleItemSupplierCard", fields: [supplierCardAccountId], references: [id], onDelete: SetNull)
+  supplierCardInstallments     Int               @default(1) // CARTAO_AGENCIA: parcelas na fatura
+  supplierCardStartInstallment Int               @default(1) // CARTAO_AGENCIA, venda antiga: parcela em que a compra está (1 = compra nova)
+  supplierCardFirstBillMonth   String? // CARTAO_AGENCIA, venda antiga: fatura (AAAA-MM) da 1ª parcela lançada
+  locator                      String?
+  sortOrder                    Int               @default(0)
 
   reservation Reservation?
 
@@ -429,33 +441,37 @@ model Payable {
 
 /// Baixa financeira (recebimento ou pagamento). Nunca é apagada: estornos marcam reversedAt.
 model Settlement {
-  id               String           @id @default(cuid())
-  companyId        String
-  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  kind             String // RECEBIMENTO | PAGAMENTO
-  receivableId     String?
-  receivable       Receivable?      @relation(fields: [receivableId], references: [id], onDelete: Restrict)
-  payableId        String?
-  payable          Payable?         @relation(fields: [payableId], references: [id], onDelete: Restrict)
-  accountId        String
-  account          FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  date             String
-  amountCents      Int // dinheiro movimentado
-  interestCents    Int              @default(0)
-  discountCents    Int              @default(0)
-  method           String?
-  notes            String?
-  createdById      String?
-  reversedAt       DateTime?
-  reversalReason   String?
-  cardInstallments Int              @default(1) // pagamento com cartão da agência: parcelas na fatura
-  cardBillsJson    String? // [{payableId, cents}] faturas do cartão que receberam este pagamento
-  createdAt        DateTime         @default(now())
+  id                   String           @id @default(cuid())
+  companyId            String
+  company              Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind                 String // RECEBIMENTO | PAGAMENTO
+  receivableId         String?
+  receivable           Receivable?      @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  payableId            String?
+  payable              Payable?         @relation(fields: [payableId], references: [id], onDelete: Restrict)
+  accountId            String
+  account              FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  date                 String
+  amountCents          Int // dinheiro movimentado
+  interestCents        Int              @default(0)
+  discountCents        Int              @default(0)
+  method               String?
+  notes                String?
+  createdById          String?
+  reversedAt           DateTime?
+  reversalReason       String?
+  cardInstallments     Int              @default(1) // pagamento com cartão da agência: parcelas na fatura
+  cardBillsJson        String? // [{payableId, cents}] faturas do cartão que receberam este pagamento
+  cardStartInstallment Int              @default(1) // compra antiga: parcela em que a compra começa nas faturas (1 = compra nova)
+  cardFirstBillMonth   String? // YYYY-MM da fatura que recebe a 1ª parcela lançada (null = pela data da baixa)
+  autoKey              String? // baixa feita sozinha pela venda (venda-cartao:{saleItemId}); a venda só refaz/estorna as dela
+  createdAt            DateTime         @default(now())
 
   attachments    Attachment[]
   statementLines BankStatementLine[]
 
   @@index([companyId, date])
+  @@index([companyId, autoKey])
 }
 
 model FinancialAccount {
@@ -471,10 +487,11 @@ model FinancialAccount {
   active              Boolean  @default(true)
   createdAt           DateTime @default(now())
 
-  settlements    Settlement[]
-  transfersOut   Transfer[]          @relation("TransferFrom")
-  transfersIn    Transfer[]          @relation("TransferTo")
-  statementLines BankStatementLine[]
+  settlements       Settlement[]
+  transfersOut      Transfer[]          @relation("TransferFrom")
+  transfersIn       Transfer[]          @relation("TransferTo")
+  statementLines    BankStatementLine[]
+  supplierCardItems SaleItem[]          @relation("SaleItemSupplierCard")
 }
 
 model Transfer {
@@ -534,6 +551,10 @@ model Contract {
   company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   saleId            String
   sale              Sale              @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  /// contrato da viagem: junta as vendas confirmadas da viagem (saleId = venda-base, a mais antiga)
+  tripId            String?
+  trip              Trip?             @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  saleIdsJson       String            @default("[]") // vendas que entraram no texto da última prévia/emissão (contrato da viagem)
   templateId        String?
   template          ContractTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   templateVersion   Int?
@@ -552,6 +573,7 @@ model Contract {
   updatedAt         DateTime          @updatedAt
 
   @@unique([companyId, saleId])
+  @@unique([companyId, tripId])
 }
 
 model AutomationSetting {
@@ -667,6 +689,7 @@ model Trip {
 
   sales       Sale[]
   attachments Attachment[]
+  contracts   Contract[]
 
   @@unique([companyId, number])
   @@index([companyId, clientId])

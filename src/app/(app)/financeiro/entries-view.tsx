@@ -191,6 +191,9 @@ export async function EntriesView({ ctx, kind, sp }: { ctx: Ctx; kind: "receivab
                     </Td>
                     <Td align="right" className="text-slate-600">
                       {formatBRL("receivedCents" in e ? (e as { receivedCents: number }).receivedCents : (e as { paidCents: number }).paidCents)}
+                      {e.status !== "CANCELADO" && e.settledCents > 0 && e.balanceCents > 0 && (
+                        <span className="block whitespace-nowrap text-xs font-medium text-amber-700">falta {formatBRL(e.balanceCents)}</span>
+                      )}
                     </Td>
                     <Td className={cn("whitespace-nowrap", overdue && "font-medium text-danger")}>{formatDate(e.dueDate)}</Td>
                     <Td>

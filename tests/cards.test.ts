@@ -2,8 +2,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/server/db";
 import { createManualPayable, createManualReceivable, settleEntry, reverseSettlement, saveAccount, cashflow } from "@/server/services/finance";
-import { cardBillSchedule, listCards } from "@/server/services/cards";
+import { cardBillSchedule, listCards, removePurchaseLine } from "@/server/services/cards";
 import { makeCompany } from "./helpers";
+import { formatBRL } from "@/lib/money";
 
 type Env = Awaited<ReturnType<typeof makeCompany>>;
 
@@ -77,9 +78,24 @@ describe("pagar fornecedor com o cartão da agência", () => {
     await reverseSettlement(env.fin, p2.settlements[0].id, "lançado no cartão errado");
     const nov = await prisma.payable.findFirstOrThrow({ where: { companyId: env.company.id, origin: "CARTAO", dueDate: "2026-11-12" } });
     expect(nov.amountCents).toBe(100000);
+    // a compra estornada sai também da lista de compras da fatura (e da contagem)
+    expect(nov.notes ?? "").not.toContain("Passeio Bonito");
+    expect(nov.notes ?? "").toContain("Hotel Gramado");
     // paga a fatura de novembro pelo banco e tenta estornar a compra de 3x
     await settleEntry(env.fin, "payable", nov.id, { date: "2026-11-12", amountCents: 100000, accountId: env.account.id });
     const p1 = await prisma.payable.findFirstOrThrow({ where: { companyId: env.company.id, description: "Hotel Gramado" }, include: { settlements: true } });
     await expect(reverseSettlement(env.fin, p1.settlements[0].id, "teste")).rejects.toThrow(/já foi paga/);
+  });
+});
+
+describe("linha da compra nas notas da fatura", () => {
+  it("tira a linha guardada ou, em baixa antiga, a que bate com data, descrição e valor", () => {
+    const hotel = `03/11/2026 · Hotel · ${formatBRL(100000)} (1/3)`;
+    const passeio = `03/11/2026 · Passeio · ${formatBRL(20000)}`;
+    const notes = [hotel, passeio].join(String.fromCharCode(10));
+    expect(removePurchaseLine(notes, { cents: 20000, line: passeio })).toBe(hotel);
+    expect(removePurchaseLine(notes, { cents: 100000 }, { date: "2026-11-03", description: "Hotel" })).toBe(passeio);
+    expect(removePurchaseLine(notes, { cents: 5000 }, { date: "2026-11-03", description: "Hotel" })).toBe(notes);
+    expect(removePurchaseLine(passeio, { cents: 20000, line: passeio })).toBeNull();
   });
 });

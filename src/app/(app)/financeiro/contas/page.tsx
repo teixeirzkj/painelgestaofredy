@@ -19,6 +19,9 @@ export default async function AccountsPage() {
   // cartões da agência têm seção própria: não são saldo em caixa
   const accounts = allAccounts.filter((a) => a.type !== "CARTAO_CREDITO");
   const active = accounts.filter((a) => a.active);
+  // faturas em aberto e as já pagas que ainda não venceram (para ver por que uma compra não pode cair nelas)
+  const t = today(ctx);
+  const shownBills = (c: (typeof cards)[number]) => c.bills.filter((b) => b.openCents > 0 || b.dueDate >= t);
   return (
     <div className="space-y-6">
     <div className="grid gap-6 xl:grid-cols-5">
@@ -99,7 +102,7 @@ export default async function AccountsPage() {
       <Card>
         <CardHeader
           title="Cartões de crédito da agência"
-          description="Para fornecedor que só aceita cartão: na baixa da conta a pagar, escolha o cartão. A conta do fornecedor fica quitada e o valor vai para a fatura, que vira uma conta a pagar no vencimento do cartão."
+          description={'Compra feita no cartão da agência? Em Contas a pagar > Nova despesa, escolha o cartão em "Como foi pago" (ou, numa conta já lançada, clique em Registrar pagamento e escolha o cartão). Na venda, o produto com "A agência paga com o cartão de crédito da agência" já lança a compra sozinho. O valor entra na fatura do mês certo, que vira uma conta a pagar no vencimento do cartão.'}
           action={canManage && <AccountButton defaultType="CARTAO_CREDITO" label="Novo cartão" />}
         />
         {cards.length === 0 ? (
@@ -129,16 +132,15 @@ export default async function AccountsPage() {
                     </span>
                   )}
                 </div>
-                {c.bills.filter((b) => b.openCents > 0).length > 0 && (
+                {shownBills(c).length > 0 && (
                   <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {c.bills
-                      .filter((b) => b.openCents > 0)
+                    {shownBills(c)
                       .map((b) => (
                         <li key={b.id}>
                           <Link href={`/financeiro/pagar?abrir=${b.id}`} className="block rounded-lg border border-line px-3 py-2 text-sm hover:bg-slate-50">
                             <span className="flex items-center justify-between gap-2">
                               <span className="font-medium">{b.description.split(" · ").pop()}</span>
-                              <span className="tabular font-semibold">{formatBRL(b.openCents)}</span>
+                              {b.openCents > 0 ? <span className="tabular font-semibold">{formatBRL(b.openCents)}</span> : <Badge tone="green">Paga</Badge>}
                             </span>
                             <span className="block text-xs text-muted">
                               vence {formatDate(b.dueDate)} · {b.purchases.length} compra(s)

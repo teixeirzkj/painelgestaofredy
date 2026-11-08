@@ -28,7 +28,18 @@ import { createSaleAction, createTripAction, searchClientsAction, tripOptionsAct
 import { calculateSale, itemCharge } from "@/lib/finance";
 import { applyBps, formatBRL, formatPercentBps, splitInstallments, sum } from "@/lib/money";
 import { addMonths } from "@/lib/dates";
-import { COMMERCIAL_MODELS, COMMERCIAL_MODEL_HELP, PAYMENT_METHODS, PRODUCT_TYPES, type CommercialModel } from "@/lib/constants";
+import {
+  AGENCY_REVENUE_MODELS,
+  COMMERCIAL_MODEL_HELP,
+  PAYMENT_METHODS,
+  PRODUCT_TYPES,
+  SUPPLIER_CASH_METHODS,
+  SUPPLIER_PAYMENTS,
+  SUPPLIER_PAYMENT_HELP,
+  type CommercialModel,
+  type SupplierPayment,
+} from "@/lib/constants";
+import { billMonthLabel, billMonthOf, cardPlan } from "@/lib/card-bills";
 import { cn, formatDocument, newKey } from "@/lib/utils";
 import { AiImport } from "./ai-import";
 import type { SaleExtraction } from "@/server/services/ai-extract";
@@ -52,10 +63,22 @@ type Item = {
   locator: string;
   /** enquanto true, comissão e over seguem a regra cadastrada para o fornecedor/produto */
   autoRule?: boolean;
+  /** só na tela: compra antiga no cartão (já tem parcelas pagas antes do sistema) */
+  cardOld?: boolean;
+} & SupplierPayFields;
+/** Como a agência paga o fornecedor (vazio = não escolhido). */
+type SupplierPayFields = {
+  supplierPayment: SupplierPayment;
+  supplierPayMethod: string;
+  supplierCardAccountId: string;
+  supplierCardInstallments: number;
+  supplierCardStartInstallment: number;
+  supplierCardFirstBillMonth: string;
 };
+type AgencyCard = { id: string; name: string; closingDay: number | null; dueDay: number | null; ready: boolean };
 type Payment = { key: string; dueDate: string; amountCents: number; method: string; description?: string | null; payerClientId?: string | null };
 type Passenger = { uid: string; name: string; document: string; birthDate: string; passportNumber: string; passportExpiry: string; clientId?: string | null; room?: string | null; seat?: string | null };
-type ClientRef = { id: string; name: string; document?: string | null; whatsapp?: string | null };
+type ClientRef = { id: string; name: string; document?: string | null; docHint?: string | null; whatsapp?: string | null };
 type Rule = { supplierId: string | null; productType: string | null; description: string | null; commissionBps: number; overBps: number };
 type Excursion = { id: string; code: string; name: string; destination: string; startDate: string; endDate: string; pricePerSeatCents: number; seats: number };
 
@@ -79,7 +102,7 @@ export type SaleFormInitial = {
   intermediaryId?: string | null;
   intermediaryCommissionCents?: number;
   commission: { mode: "VALOR"; amountCents: number } | { mode: "PERCENTUAL"; bps: number };
-  items: Omit<Item, "uid">[];
+  items: (Omit<Item, "uid" | keyof SupplierPayFields> & Partial<SupplierPayFields>)[];
   payments: Payment[];
   passengers: Omit<Passenger, "uid">[];
   people?: ClientRef[]; // pagantes/passageiros já vinculados
@@ -103,8 +126,46 @@ const blankItem = (patch: Partial<Item> = {}): Item => ({
   supplierDueDate: "",
   locator: "",
   autoRule: true,
-  ...patch,
+  supplierPayment: "FATURADO",
+  supplierPayMethod: "",
+  supplierCardAccountId: "",
+  supplierCardInstallments: 1,
+  supplierCardStartInstallment: 1,
+  supplierCardFirstBillMonth: "",
+  ...(Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<Item>),
 });
+
+/** Produto vindo do servidor: completa os campos novos e mantém o modelo Comissão como "cliente paga direto". */
+function itemFromInitial(i: SaleFormInitial["items"][number]): Item {
+  const item = blankItem({ ...i, autoRule: false });
+  if (item.commercialModel === "COMISSAO") item.supplierPayment = "CLIENTE_DIRETO";
+  item.cardOld = item.supplierCardInstallments > 1 && (item.supplierCardStartInstallment > 1 || !!item.supplierCardFirstBillMonth);
+  return item;
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** Prévia das faturas do cartão em que a compra cai. */
+function cardPreview(i: Item, card: AgencyCard | undefined, saleDate: string) {
+  if (!card?.closingDay || !card.dueDay || i.costCents <= 0) return null;
+  const installments = Math.max(1, i.supplierCardInstallments);
+  const isOld = !!i.cardOld && installments > 1; // "venda antiga" só vale com mais de uma parcela, igual ao envio
+  const start = Math.min(Math.max(1, isOld ? i.supplierCardStartInstallment : 1), installments);
+  const date = i.supplierDueDate || saleDate;
+  const firstMonth = (isOld && i.supplierCardFirstBillMonth) || billMonthOf(date, card.closingDay);
+  const plan = cardPlan({ amountCents: i.costCents, installments, startInstallment: start, firstMonth, closingDay: card.closingDay, dueDay: card.dueDay });
+  if (!plan.length) return null;
+  const labels = plan.map((p) => p.label);
+  const where =
+    labels.length === 1
+      ? `Entra na fatura de ${labels[0]}`
+      : labels.length <= 4
+        ? `Entra em ${labels.length} faturas: ${labels.slice(0, -1).join(", ")} e ${labels[labels.length - 1]}`
+        : `Entra em ${labels.length} faturas, de ${labels[0]} a ${labels[labels.length - 1]}`;
+  const each = plan.length > 1 || installments > 1 ? ` · parcelas de ${formatBRL(plan[plan.length - 1].cents)}` : "";
+  const old = start > 1 ? ` (parcelas ${start} a ${installments}; as anteriores já estavam pagas)` : "";
+  return `${where}${each}${old}.`;
+}
 
 function pickRule(rules: Rule[], supplierId: string, productType: string) {
   return (
@@ -137,7 +198,7 @@ function Section({ icon: Icon, title, description, children, aside, step }: { ic
 }
 
 /** Busca/cadastro de pessoa (cliente, pagante ou passageiro). */
-function PersonSearch({ onPick, placeholder = "Buscar por nome, CPF/CNPJ ou WhatsApp…", error, autoFocus }: { onPick: (c: ClientRef) => void; placeholder?: string; error?: string; autoFocus?: boolean }) {
+function PersonSearch({ onPick, placeholder = "Buscar por nome, CPF/CNPJ, passaporte ou WhatsApp…", error, autoFocus }: { onPick: (c: ClientRef) => void; placeholder?: string; error?: string; autoFocus?: boolean }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<ClientRef[]>([]);
   const [open, setOpen] = useState(false);
@@ -180,7 +241,7 @@ function PersonSearch({ onPick, placeholder = "Buscar por nome, CPF/CNPJ ou What
             <li key={c.id}>
               <button type="button" className="w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50" onMouseDown={() => onPick(c)}>
                 <span className="block text-sm font-medium">{c.name}</span>
-                <span className="block text-xs text-muted">{[c.document && formatDocument(c.document), c.whatsapp].filter(Boolean).join(" · ") || "sem documento"}</span>
+                <span className="block text-xs text-muted">{[c.document ? formatDocument(c.document) : c.docHint, c.whatsapp].filter(Boolean).join(" · ") || "sem documento"}</span>
               </button>
             </li>
           ))}
@@ -211,7 +272,7 @@ function ClientPicker({ value, onChange, error }: { value: ClientRef | null; onC
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-ink">{value.name}</p>
-            <p className="text-xs text-muted">{[value.document && formatDocument(value.document), value.whatsapp].filter(Boolean).join(" · ") || "Sem documento cadastrado"}</p>
+            <p className="text-xs text-muted">{[value.document ? formatDocument(value.document) : value.docHint, value.whatsapp].filter(Boolean).join(" · ") || "Sem documento cadastrado"}</p>
           </div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={() => onChange(null)}>
@@ -230,6 +291,7 @@ export function SaleForm({
   showMargin,
   rules = [],
   excursions = [],
+  agencyCards = [],
   fredyCardId,
   balcaoFlowId,
   afterSaveHref,
@@ -241,6 +303,8 @@ export function SaleForm({
   showMargin: boolean;
   rules?: Rule[];
   excursions?: Excursion[];
+  /** cartões de crédito da agência (para "como o fornecedor é pago") */
+  agencyCards?: AgencyCard[];
   /** venda feita a partir de um card do Frédy (tela do vendedor): fica ligada ao card */
   fredyCardId?: string | null;
   /** venda lançada dentro de um atendimento da venda rápida: fica ligada a ele */
@@ -266,7 +330,13 @@ export function SaleForm({
     excursionId: initial.excursionId ?? "",
     intermediaryId: initial.intermediaryId ?? "",
   });
-  const [items, setItems] = useState<Item[]>(initial.items.length ? initial.items.map((i) => ({ ...i, uid: newKey(), autoRule: false })) : [blankItem()]);
+  const [items, setItems] = useState<Item[]>(initial.items.length ? initial.items.map(itemFromInitial) : [blankItem()]);
+  // produtos que já estavam no cartão da agência numa venda confirmada (a compra já está na fatura)
+  const cardAlready = useMemo(
+    () => new Set(isDraft ? [] : initial.items.filter((i) => i.id && i.supplierPayment === "CARTAO_AGENCIA").map((i) => i.id as string)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   const [fees, setFees] = useState(initial.feesCents);
   const [discount, setDiscount] = useState(initial.discountCents);
   const [interComm, setInterComm] = useState(initial.intermediaryCommissionCents ?? 0);
@@ -369,6 +439,27 @@ export function SaleForm({
       }),
     );
 
+  /** Troca "como o fornecedor é pago" mantendo o modelo comercial coerente. */
+  function changeSupplierPayment(i: Item, pay: SupplierPayment) {
+    const patch: Partial<Item> = { supplierPayment: pay };
+    if (pay === "CLIENTE_DIRETO") patch.commercialModel = "COMISSAO";
+    else if (i.commercialModel === "COMISSAO") patch.commercialModel = "INTERMEDIACAO";
+    if (pay === "A_VISTA" && !i.supplierPayMethod) patch.supplierPayMethod = "PIX";
+    if (pay === "CARTAO_AGENCIA" && !i.supplierCardAccountId) patch.supplierCardAccountId = agencyCards.find((c) => c.ready)?.id ?? "";
+    updateItem(i.uid, patch);
+  }
+
+  /** Liga/desliga "compra antiga" no cartão: sugere a fatura em aberto hoje. */
+  function toggleCardOld(i: Item, on: boolean) {
+    const card = agencyCards.find((c) => c.id === i.supplierCardAccountId);
+    updateItem(
+      i.uid,
+      on
+        ? { cardOld: true, supplierCardStartInstallment: Math.min(2, Math.max(1, i.supplierCardInstallments)), supplierCardFirstBillMonth: card?.closingDay ? billMonthOf(todayIso(), card.closingDay) : "" }
+        : { cardOld: false, supplierCardStartInstallment: 1, supplierCardFirstBillMonth: "" },
+    );
+  }
+
   function pickExcursion(id: string) {
     const e = excursions.find((x) => x.id === id);
     setG((x) => ({ ...x, excursionId: id, ...(e ? { destination: e.destination, tripStart: e.startDate, tripEnd: e.endDate } : {}) }));
@@ -409,12 +500,17 @@ export function SaleForm({
       intermediaryId: g.intermediaryId || null,
       intermediaryCommissionCents: g.intermediaryId ? interComm : 0,
       commission,
-      items: items.map(({ uid: _uid, autoRule: _a, ...i }) => ({
+      items: items.map(({ uid: _uid, autoRule: _a, cardOld, ...i }) => ({
         ...i,
         id: i.id ?? null,
         supplierId: i.supplierId || null,
         operatorId: i.operatorId || null,
         supplierDueDate: i.supplierDueDate || null,
+        supplierPayMethod: i.supplierPayment === "A_VISTA" ? i.supplierPayMethod || null : null,
+        supplierCardAccountId: i.supplierPayment === "CARTAO_AGENCIA" ? i.supplierCardAccountId || null : null,
+        supplierCardInstallments: i.supplierPayment === "CARTAO_AGENCIA" ? i.supplierCardInstallments : 1,
+        supplierCardStartInstallment: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardStartInstallment : 1,
+        supplierCardFirstBillMonth: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardFirstBillMonth || null : null,
         costCents: i.commercialModel === "COMISSAO" ? 0 : i.costCents,
         supplierCommissionCents: i.commercialModel === "COMISSAO" ? i.supplierCommissionCents : 0,
         cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
@@ -425,7 +521,10 @@ export function SaleForm({
     };
     const r = await run(() => (editing ? updateSaleAction(initial.id!, payload) : createSaleAction(payload, { fredyCardId, balcaoFlowId })), {
       refresh: false,
-      onSuccess: (d) => router.push(afterSaveHref ? afterSaveHref.replace(":id", d.id) : `/vendas/${d.id}`),
+      onSuccess: (d) => {
+        if (d.warnings?.length) setTimeout(() => alert(`Venda salva. Atenção:\n\n${d.warnings.join("\n\n")}`), 50);
+        router.push(afterSaveHref ? afterSaveHref.replace(":id", d.id) : `/vendas/${d.id}`);
+      },
     });
     if (!r.ok) setErrors(issuesToMap(r.issues));
   }
@@ -463,6 +562,12 @@ export function SaleForm({
     { ok: !!g.locator || items.some((i) => i.locator), label: "Localizador da reserva" },
     { ok: passengers.filter((p) => p.name.trim()).length >= (Number(g.passengerCount) || 1), label: `Passageiros informados (${passengers.filter((p) => p.name.trim()).length}/${Number(g.passengerCount) || 1})` },
     { ok: totals.clientPayableCents === 0 || diff === 0, label: "Parcelas conferem com o valor" },
+    {
+      ok:
+        items.every((i) => i.supplierPayment !== "CARTAO_AGENCIA" || (!!i.supplierCardAccountId && i.costCents > 0)) &&
+        items.every((i) => i.supplierPayment !== "A_VISTA" || !!i.supplierPayMethod),
+      label: "Forma de pagar o fornecedor completa",
+    },
   ];
 
   return (
@@ -597,11 +702,11 @@ export function SaleForm({
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Modelo comercial" className="sm:col-span-2" hint={COMMERCIAL_MODEL_HELP[i.commercialModel]}>
-                      <Select value={i.commercialModel} onChange={(e) => updateItem(i.uid, { commercialModel: e.target.value as CommercialModel })}>
-                        {COMMERCIAL_MODELS.values.map((v) => (
+                    <Field label="Como o fornecedor é pago" className="sm:col-span-2" hint={SUPPLIER_PAYMENT_HELP[i.supplierPayment]}>
+                      <Select value={i.supplierPayment} onChange={(e) => changeSupplierPayment(i, e.target.value as SupplierPayment)}>
+                        {SUPPLIER_PAYMENTS.values.map((v) => (
                           <option key={v} value={v}>
-                            {COMMERCIAL_MODELS.label(v)}
+                            {SUPPLIER_PAYMENTS.label(v)}
                           </option>
                         ))}
                       </Select>
@@ -619,10 +724,99 @@ export function SaleForm({
                       </Field>
                     )}
                   </div>
+                  {i.supplierPayment === "A_VISTA" && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <Field label="Como a agência pagou" required error={err(`items.${idx}.supplierPayMethod`)}>
+                        <Select value={i.supplierPayMethod} onChange={(e) => updateItem(i.uid, { supplierPayMethod: e.target.value })}>
+                          <option value="">Selecione…</option>
+                          {SUPPLIER_CASH_METHODS.map((m) => (
+                            <option key={m} value={m}>
+                              {PAYMENT_METHODS.label(m)}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Data do pagamento ao fornecedor" hint="Se vazio, usa a data da venda.">
+                        <Input type="date" value={i.supplierDueDate} onChange={(e) => updateItem(i.uid, { supplierDueDate: e.target.value })} />
+                      </Field>
+                    </div>
+                  )}
+                  {i.supplierPayment === "CARTAO_AGENCIA" &&
+                    (() => {
+                      const card = agencyCards.find((c) => c.id === i.supplierCardAccountId);
+                      const preview = cardPreview(i, card, g.saleDate);
+                      return (
+                        <div className="mt-3 rounded-lg border border-brand-100 bg-brand-25 p-3">
+                          {agencyCards.length === 0 ? (
+                            <p className="text-sm text-amber-800">Nenhum cartão da agência cadastrado. Cadastre em Financeiro › Contas e saldos.</p>
+                          ) : (
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                              <Field label="Qual cartão" required error={err(`items.${idx}.supplierCardAccountId`)}>
+                                <Select value={i.supplierCardAccountId} onChange={(e) => updateItem(i.uid, { supplierCardAccountId: e.target.value })}>
+                                  <option value="">Selecione o cartão…</option>
+                                  {agencyCards.map((c) => (
+                                    <option key={c.id} value={c.id} disabled={!c.ready}>
+                                      {c.name}
+                                      {c.ready ? "" : " (falta o dia de fechamento e de vencimento)"}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </Field>
+                              <Field label="Parcelas na fatura">
+                                <Select
+                                  value={String(i.supplierCardInstallments)}
+                                  onChange={(e) => {
+                                    const n = Number(e.target.value);
+                                    if (n < 2) updateItem(i.uid, { supplierCardInstallments: n, cardOld: false, supplierCardStartInstallment: 1, supplierCardFirstBillMonth: "" });
+                                    else updateItem(i.uid, { supplierCardInstallments: n, supplierCardStartInstallment: Math.min(i.supplierCardStartInstallment, n) });
+                                  }}
+                                >
+                                  {Array.from({ length: 24 }, (_, k) => k + 1).map((n) => (
+                                    <option key={n} value={n}>
+                                      {n === 1 ? "1x (à vista)" : `${n}x`}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </Field>
+                              <Field label="Data da compra no cartão" hint="Define em qual fatura entra. Se vazio, usa a data da venda.">
+                                <Input type="date" value={i.supplierDueDate} onChange={(e) => updateItem(i.uid, { supplierDueDate: e.target.value })} />
+                              </Field>
+                              <label className="flex items-center gap-2 self-end pb-2 text-[13px] text-slate-700">
+                                <input type="checkbox" checked={!!i.cardOld} onChange={(e) => toggleCardOld(i, e.target.checked)} disabled={i.supplierCardInstallments < 2} />
+                                Venda antiga (já tem parcelas pagas)
+                              </label>
+                              {i.cardOld && i.supplierCardInstallments > 1 && (
+                                <>
+                                  <Field label="Em que parcela a compra está" error={err(`items.${idx}.supplierCardStartInstallment`)} hint="as anteriores já foram pagas e não entram nas faturas">
+                                    <Select value={String(i.supplierCardStartInstallment)} onChange={(e) => updateItem(i.uid, { supplierCardStartInstallment: Number(e.target.value) })}>
+                                      {Array.from({ length: i.supplierCardInstallments }, (_, k) => k + 1).map((n) => (
+                                        <option key={n} value={n}>
+                                          {n}ª de {i.supplierCardInstallments}
+                                        </option>
+                                      ))}
+                                    </Select>
+                                  </Field>
+                                  <Field label="Fatura em que essa parcela cai" hint="mês da fatura do cartão">
+                                    <Input type="month" value={i.supplierCardFirstBillMonth} onChange={(e) => updateItem(i.uid, { supplierCardFirstBillMonth: e.target.value })} />
+                                  </Field>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {preview && <p className="mt-2 text-xs text-brand-700">{preview}</p>}
+                          {i.costCents <= 0 && agencyCards.length > 0 && <p className="mt-2 text-xs text-amber-800">Informe o custo do fornecedor para lançar no cartão.</p>}
+                          {i.id && cardAlready.has(i.id) && (
+                            <p className="mt-2 text-xs text-amber-800">
+                              Este custo já está na fatura do cartão. Se mudar valor, cartão ou parcelas, o sistema ajusta a fatura (desde que ela ainda não tenha sido paga).
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   <details className="group mt-3" open={extras}>
                     <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-brand-600 [&::-webkit-details-marker]:hidden">
                       <span className="group-open:hidden">+</span>
-                      <span className="hidden group-open:inline">−</span> Taxas RAV/DU, over, operadora, localizador e vencimento
+                      <span className="hidden group-open:inline">−</span> Taxas RAV/DU, over, operadora, localizador, vencimento e receita
                       {rule && i.autoRule && rule.overBps > 0 && <Badge tone="violet" className="ml-1">over automático</Badge>}
                     </summary>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -655,9 +849,26 @@ export function SaleForm({
                       <Field label="Localizador do item">
                         <Input value={i.locator} onChange={(e) => updateItem(i.uid, { locator: e.target.value })} />
                       </Field>
-                      <Field label={i.commercialModel === "COMISSAO" ? "Previsão do repasse do fornecedor" : "Vencimento do pagamento ao fornecedor"} hint="Se vazio, o sistema sugere pela data da viagem." className="sm:col-span-2">
-                        <Input type="date" value={i.supplierDueDate} onChange={(e) => updateItem(i.uid, { supplierDueDate: e.target.value })} />
-                      </Field>
+                      {(i.supplierPayment === "CLIENTE_DIRETO" || i.supplierPayment === "FATURADO") && (
+                        <Field
+                          label={i.supplierPayment === "CLIENTE_DIRETO" ? "Previsão do repasse da comissão" : "Vencimento do pagamento ao fornecedor"}
+                          hint="Se vazio, o sistema sugere pela data da viagem."
+                          className="sm:col-span-2"
+                        >
+                          <Input type="date" value={i.supplierDueDate} onChange={(e) => updateItem(i.uid, { supplierDueDate: e.target.value })} />
+                        </Field>
+                      )}
+                      {i.supplierPayment !== "CLIENTE_DIRETO" && (
+                        <Field label="Como contar a receita" hint={COMMERCIAL_MODEL_HELP[i.commercialModel]} className="sm:col-span-2">
+                          <Select value={i.commercialModel} onChange={(e) => updateItem(i.uid, { commercialModel: e.target.value as CommercialModel })}>
+                            {AGENCY_REVENUE_MODELS.values.map((v) => (
+                              <option key={v} value={v}>
+                                {AGENCY_REVENUE_MODELS.label(v)}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                      )}
                     </div>
                   </details>
                 </div>
@@ -889,11 +1100,11 @@ export function SaleForm({
             {passengers.map((p) => {
               const set = (patch: Partial<Passenger>) => setPassengers(passengers.map((x) => (x.uid === p.uid ? { ...x, ...patch } : x)));
               return (
-                <div key={p.uid} className="grid gap-3 rounded-xl border border-line p-3 sm:grid-cols-6">
+                <div key={p.uid} className="grid gap-3 rounded-xl border border-line p-3 sm:grid-cols-4 lg:grid-cols-7">
                   <Field label={p.clientId ? "Nome (cadastro vinculado)" : "Nome"} className="sm:col-span-2">
                     <Input value={p.name} onChange={(e) => set({ name: e.target.value })} />
                   </Field>
-                  <Field label="CPF / RG">
+                  <Field label="CPF, RG ou RNE">
                     <Input value={p.document} onChange={(e) => set({ document: e.target.value })} />
                   </Field>
                   <Field label="Nascimento">
@@ -901,6 +1112,9 @@ export function SaleForm({
                   </Field>
                   <Field label="Passaporte (se necessário)">
                     <Input value={p.passportNumber} onChange={(e) => set({ passportNumber: e.target.value })} autoComplete="off" />
+                  </Field>
+                  <Field label="Validade do passaporte">
+                    <Input type="date" value={p.passportExpiry} onChange={(e) => set({ passportExpiry: e.target.value })} />
                   </Field>
                   <div className="flex items-end">
                     <Button type="button" variant="ghost" size="sm" onClick={() => setPassengers(passengers.filter((x) => x.uid !== p.uid))}>
@@ -934,7 +1148,7 @@ export function SaleForm({
               )}
             </div>
             <p className="flex items-center gap-1 text-xs text-muted">
-              <Info className="h-3.5 w-3.5" /> Cliente, pagante e passageiro podem ser pessoas diferentes. Documentos como passaporte são opcionais e exibidos mascarados.
+              <Info className="h-3.5 w-3.5" /> Cliente, pagante e passageiro podem ser pessoas diferentes. Para quem tem cadastro, o que ficar em branco (documento, nascimento, passaporte) é completado com o cadastro ao salvar.
             </p>
             <Field label="Observações da venda">
               <Textarea value={g.notes} onChange={(e) => setG({ ...g, notes: e.target.value })} />
@@ -987,6 +1201,7 @@ export function SaleForm({
           <ul className="mt-3 space-y-1.5 text-[13px] text-slate-600">
             <li>• {payments.length} parcela(s) em contas a receber</li>
             <li>• contas a pagar aos fornecedores</li>
+            {items.some((i) => i.supplierPayment === "CARTAO_AGENCIA") && <li>• compras no cartão da agência já lançadas nas faturas</li>}
             {(over > 0 || items.some((i) => i.commercialModel === "COMISSAO")) && <li>• repasses de comissão/over a receber dos fornecedores</li>}
             <li>• comissão do vendedor{totals.intermediaryCommissionCents > 0 ? " e do intermediário" : ""}</li>
             <li>• reservas, prévia do contrato e eventos de automação</li>

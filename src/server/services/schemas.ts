@@ -11,9 +11,13 @@ import {
   PERSON_TYPES,
   EXCURSION_STATUS,
   REFUND_KINDS,
+  SUPPLIER_PAYMENTS,
+  SUPPLIER_CASH_METHODS,
 } from "@/lib/constants";
+import { normalizeSupplierPayment } from "@/lib/finance";
 import { isIsoDate } from "@/lib/dates";
 import { isValidDocument, onlyDigits } from "@/lib/utils";
+import { normalizeDocCode, normalizeGender } from "@/lib/client-identity";
 
 export const isoDate = z.string().refine(isIsoDate, "Data inválida.");
 const optDate = z
@@ -29,8 +33,12 @@ const optText = (max = 500) =>
     .optional()
     .nullable()
     .transform((v) => (v && v.trim() ? v.trim() : null));
+/** Passaporte / RNE: maiúsculas, sem espaços. */
+const docCode = (max = 20) => optText(max + 10).transform((v) => normalizeDocCode(v)).refine((v) => v === null || v.length <= max, `Máximo de ${max} caracteres.`);
 const cents = z.number().int("Valor inválido.").min(0, "Valor não pode ser negativo.").max(2_000_000_000, "Valor muito alto.");
 const id = z.string().min(1).max(40);
+/** Mês de fatura do cartão: "AAAA-MM". */
+const billMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Escolha o mês da fatura.");
 
 export const saleItemSchema = z.object({
   id: id.optional().nullable(),
@@ -48,7 +56,21 @@ export const saleItemSchema = z.object({
   duCents: cents.default(0),
   overCents: cents.default(0),
   cardFeeCents: cents.default(0),
-});
+  // Como a agência paga o fornecedor (sem o campo, sai do modelo comercial: ver normalizeSupplierPayment)
+  supplierPayment: z.enum(SUPPLIER_PAYMENTS.values).optional().nullable(),
+  supplierPayMethod: z.enum(SUPPLIER_CASH_METHODS).optional().nullable().or(z.literal("")).transform((v) => v || null),
+  supplierCardAccountId: id.optional().nullable().or(z.literal("")).transform((v) => v || null),
+  supplierCardInstallments: z.number().int().min(1, "Parcelas inválidas.").max(24, "No máximo 24 parcelas.").default(1),
+  supplierCardStartInstallment: z.number().int().min(1, "Parcela inválida.").max(24, "Parcela inválida.").default(1),
+  supplierCardFirstBillMonth: billMonth.optional().nullable().or(z.literal("")).transform((v) => v || null),
+})
+  .transform((i) => normalizeSupplierPayment(i))
+  .superRefine((i, c) => {
+    if (i.supplierPayment === "A_VISTA" && !i.supplierPayMethod)
+      c.addIssue({ code: "custom", path: ["supplierPayMethod"], message: "Escolha como a agência pagou (pix, transferência, dinheiro ou débito)." });
+    if (i.supplierPayment === "CARTAO_AGENCIA" && i.supplierCardStartInstallment > i.supplierCardInstallments)
+      c.addIssue({ code: "custom", path: ["supplierCardStartInstallment"], message: "A parcela inicial não pode ser maior que o número de parcelas." });
+  });
 
 export const paymentPlanSchema = z.object({
   key: z.string().min(1).max(60),
@@ -63,7 +85,7 @@ export const passengerSchema = z.object({
   name: z.string().trim().min(2, "Nome do passageiro obrigatório.").max(120),
   document: optText(20),
   birthDate: optDate,
-  passportNumber: optText(20),
+  passportNumber: docCode(20),
   passportExpiry: optDate,
   clientId: id.optional().nullable().transform((v) => v || null),
   room: optText(40),
@@ -116,8 +138,12 @@ export const clientSchema = z.object({
   tradeName: optText(150),
   document: docField,
   rg: optText(20),
-  passportNumber: optText(20),
+  passportNumber: docCode(20),
   passportExpiry: optDate,
+  foreigner: z.boolean().default(false),
+  nationality: optText(60),
+  rne: docCode(20),
+  gender: z.string().optional().nullable().transform((v) => normalizeGender(v)),
   specialNeeds: optText(500),
   phone: optText(20),
   whatsapp: optText(20),
@@ -141,7 +167,7 @@ export const clientSchema = z.object({
 }).refine((c) => !c.document || (c.personType === "PJ" ? c.document.length === 14 : c.document.length === 11), {
   message: "Use CPF para pessoa física e CNPJ para pessoa jurídica.",
   path: ["document"],
-});
+}).transform((c) => (c.personType === "PJ" ? { ...c, foreigner: false, nationality: null, rne: null, gender: null } : c));
 export type ClientInput = z.input<typeof clientSchema>;
 
 export const supplierSchema = z.object({
@@ -189,6 +215,24 @@ export const manualPayableSchema = z.object({
   method: z.enum(PAYMENT_METHODS.values).optional().nullable(),
   costCenterId: id.optional().nullable().transform((v) => v || null),
   notes: optText(1000),
+  /** Compra já feita no cartão da agência: a conta nasce paga e o valor vai para as faturas. */
+  card: z
+    .object({
+      accountId: id,
+      installments: z.number().int().min(1).max(24).default(1),
+      startInstallment: z.number().int().min(1).max(24).default(1),
+      firstBillMonth: billMonth.optional().nullable().transform((v) => v || null),
+    })
+    .refine((c) => c.startInstallment <= c.installments, { message: "A parcela inicial não pode ser maior que o número de parcelas.", path: ["startInstallment"] })
+    .optional()
+    .nullable(),
+});
+
+/** Ligar a um cartão um lançamento antigo feito à mão com a categoria "Fatura do cartão". */
+export const linkToCardSchema = z.object({
+  accountId: id,
+  billMonth,
+  category: z.string().trim().min(1, "Escolha a categoria da despesa.").max(40),
 });
 
 export const entryEditSchema = z.object({
@@ -210,7 +254,12 @@ export const settlementSchema = z.object({
   method: z.enum(PAYMENT_METHODS.values).optional().nullable(),
   notes: optText(500),
   cardInstallments: z.number().int().min(1).max(24).default(1),
-});
+  /** Novo valor total da conta neste mês (só para lançamentos feitos à mão). */
+  newTotalCents: cents.optional().nullable().transform((v) => (v ? v : null)),
+  /** Cartão da agência: fatura da 1ª parcela lançada (vazio = pela data) e parcela em que a compra está. */
+  cardFirstBillMonth: billMonth.optional().nullable().transform((v) => v || null),
+  cardStartInstallment: z.number().int().min(1).max(24).default(1),
+}).refine((d) => d.cardStartInstallment <= d.cardInstallments, { message: "A parcela inicial não pode ser maior que o número de parcelas.", path: ["cardStartInstallment"] });
 export type SettlementInput = z.input<typeof settlementSchema>;
 
 export const accountSchema = z.object({

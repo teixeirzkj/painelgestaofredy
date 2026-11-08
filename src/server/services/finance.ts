@@ -5,6 +5,7 @@ import { audit } from "../audit";
 import {
   accountSchema,
   entryEditSchema,
+  linkToCardSchema,
   manualPayableSchema,
   manualReceivableSchema,
   settlementSchema,
@@ -19,13 +20,19 @@ import { refreshCommissionStatus, saleScope } from "./sales";
 import { refreshInvoiceStatus } from "./invoices";
 import { assertPayableCategory, categoryMap } from "./admin";
 import { textContains, entryDelegate } from "./query";
-import { applyCardCharge, reverseCardCharge, CARD_BILL_CATEGORY } from "./cards";
+import { applyCardCharge, reverseCardCharge, getCardBillsFor, CARD_BILL_CATEGORY } from "./cards";
+import { cardBillScheduleFrom } from "@/lib/card-bills";
 import { ATTACHMENT_KINDS, CLIENT_DOC_KINDS, PAYABLE_CATEGORIES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 import { clientScope } from "./registry";
+import { normalizeDocCode } from "@/lib/client-identity";
 
 export type EntryKind = "receivable" | "payable";
 
 const money = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+/** A categoria da fatura do cartão é do sistema: lançamentos à mão não podem usá-la. */
+export const CARD_BILL_MANUAL_ERROR =
+  'A categoria "Fatura do cartão da agência" é preenchida sozinha pelo sistema. Escolha a categoria da despesa (ex.: Fornecedores) e, em "Como foi pago", escolha o cartão.';
 
 // ---------------------------------------------------------------------------
 // Listagem
@@ -183,7 +190,13 @@ export async function getEntry(ctx: Ctx, kind: EntryKind, id: string) {
           include: { ...include, client: { select: { id: true, name: true } }, invoice: { select: { id: true, number: true, status: true } } },
         });
   if (!entry) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
-  return { ...entry, balanceCents: entry.amountCents - entry.settledCents, displayStatus: displayStatus(entry.status, entry.dueDate, today(ctx)) };
+  const cardBills = await getCardBillsFor(prisma as unknown as Tx, ctx.companyId, entry.settlements);
+  return {
+    ...entry,
+    settlements: entry.settlements.map((s) => ({ ...s, cardBills: cardBills[s.id] ?? [] })),
+    balanceCents: entry.amountCents - entry.settledCents,
+    displayStatus: displayStatus(entry.status, entry.dueDate, today(ctx)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +241,54 @@ export async function createManualReceivable(ctx: Ctx, raw: unknown) {
 export async function createManualPayable(ctx: Ctx, raw: unknown) {
   assertCan(ctx, "finance.manage");
   const d = manualPayableSchema.parse(raw);
+  if (d.category === CARD_BILL_CATEGORY) throw new AppError(CARD_BILL_MANUAL_ERROR);
+  if (d.card && d.recurringMonths > 1) throw new AppError("Despesa recorrente no cartão: registre a cada mês, quando a cobrança vier.");
   if (d.installments > 1 && d.recurringMonths > 1) throw new AppError("Escolha parcelamento OU recorrência, não ambos.");
   return prisma.$transaction(async (tx) => {
     if (d.supplierId && !(await tx.supplier.findFirst({ where: { id: d.supplierId, companyId: ctx.companyId } }))) throw new AppError("Fornecedor inválido.");
     if (d.saleId && !(await tx.sale.findFirst({ where: { id: d.saleId, companyId: ctx.companyId } }))) throw new AppError("Venda inválida.");
     await assertCostCenter(tx, ctx, d.costCenterId);
     await assertPayableCategory(tx, ctx.companyId, d.category);
+    if (d.card) {
+      // Compra já feita no cartão da agência: uma conta só, que nasce paga; as parcelas vão para as faturas do cartão.
+      const card = await tx.financialAccount.findFirst({ where: { id: d.card.accountId, companyId: ctx.companyId, active: true, type: "CARTAO_CREDITO" } });
+      if (!card) throw new AppError("Conta financeira inválida.");
+      const p = await tx.payable.create({
+        data: {
+          companyId: ctx.companyId,
+          origin: "MANUAL",
+          supplierId: d.supplierId,
+          saleId: d.saleId,
+          description: d.description,
+          category: d.category,
+          costCenterId: d.costCenterId,
+          amountCents: d.amountCents,
+          dueDate: d.firstDueDate,
+          method: "CARTAO_CREDITO",
+          status: "PENDENTE",
+          notes: d.notes,
+        },
+      });
+      await settleEntryTx(
+        tx,
+        ctx,
+        "payable",
+        p.id,
+        {
+          date: d.firstDueDate,
+          amountCents: d.amountCents,
+          interestCents: 0,
+          discountCents: 0,
+          accountId: card.id,
+          cardInstallments: d.card.installments,
+          cardStartInstallment: d.card.startInstallment,
+          cardFirstBillMonth: d.card.firstBillMonth,
+        },
+        { viaInvoice: false },
+      );
+      await audit(tx, ctx, "pagar.criado", "Payable", p.id, { ids: [p.id], amountCents: d.amountCents, cartao: d.card });
+      return [p.id];
+    }
     const recurring = d.recurringMonths > 1;
     const parts = recurring ? Array(d.recurringMonths).fill(d.amountCents) : splitInstallments(d.amountCents, d.installments);
     const group = recurring ? newKey() : null;
@@ -276,8 +331,17 @@ export async function updateEntry(ctx: Ctx, kind: EntryKind, id: string, raw: un
     const [e] = await model.findMany({ where: { id, companyId: ctx.companyId } });
     if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
     if (e.status === "CANCELADO") throw new AppError("Lançamento cancelado não pode ser alterado.");
+    const isCardBill = kind === "payable" && e.origin === "CARTAO";
+    if (kind === "payable" && d.category !== e.category) {
+      if (isCardBill) throw new AppError('A fatura do cartão fica sempre na categoria "Fatura do cartão da agência".');
+      if (d.category === CARD_BILL_CATEGORY) throw new AppError(CARD_BILL_MANUAL_ERROR);
+    }
     if (e.sourceKey && d.amountCents !== e.amountCents)
-      throw new AppError("Este lançamento foi gerado por uma venda. Altere o valor pela própria venda.");
+      throw new AppError(
+        isCardBill
+          ? "Esta é a fatura do cartão: o valor é a soma das compras. Para mudar, estorne ou lance a compra de novo."
+          : "Este lançamento foi gerado por uma venda. Altere o valor pela própria venda.",
+      );
     if (d.amountCents < e.settledCents) throw new AppError(`O valor não pode ser menor que o já baixado (${money(e.settledCents)}).`);
     await assertCostCenter(tx, ctx, d.costCenterId);
     if (e.invoiceId && d.dueDate !== e.dueDate)
@@ -299,6 +363,7 @@ export async function cancelEntry(ctx: Ctx, kind: EntryKind, id: string) {
     if (!e) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
     if (e.status === "CANCELADO") return;
     if (e.settledCents > 0) throw new AppError("Há baixas registradas. Estorne as baixas antes de cancelar.");
+    if (kind === "payable" && e.origin === "CARTAO") throw new AppError("A fatura do cartão some sozinha quando todas as compras dela são estornadas.");
     if (e.sourceKey && !e.sourceKey.startsWith("ajuste:")) throw new AppError("Lançamento gerado por venda: ajuste ou cancele pela venda.");
     if (e.invoiceId) throw new AppError("Remova o lançamento da fatura do fornecedor antes de cancelá-lo.");
     await model.update({ where: { id }, data: { status: "CANCELADO", cancelledAt: new Date() } });
@@ -336,7 +401,24 @@ export async function settleEntryTx(
   ctx: Ctx,
   kind: EntryKind,
   id: string,
-  d: { date: string; amountCents: number; interestCents: number; discountCents: number; accountId: string; method?: string | null; notes?: string | null; cardInstallments?: number },
+  d: {
+    date: string;
+    amountCents: number;
+    interestCents: number;
+    discountCents: number;
+    accountId: string;
+    method?: string | null;
+    notes?: string | null;
+    cardInstallments?: number;
+    /** Cartão da agência: fatura da 1ª parcela lançada ("AAAA-MM"; vazio = pela data da baixa). */
+    cardFirstBillMonth?: string | null;
+    /** Cartão da agência, compra antiga: parcela em que a compra está (as anteriores já foram pagas). */
+    cardStartInstallment?: number;
+    /** Novo valor total da conta (ex.: VT ou comissão que muda todo mês). Só para lançamentos feitos à mão. */
+    newTotalCents?: number | null;
+    /** Baixa feita sozinha pela venda (ex.: "venda-cartao:{saleItemId}"). */
+    autoKey?: string | null;
+  },
   opts: { viaInvoice: boolean },
 ) {
   const principal = settlementPrincipal(d.amountCents, d.interestCents, d.discountCents);
@@ -348,7 +430,22 @@ export async function settleEntryTx(
     if (e.status === "CANCELADO") throw new AppError("Lançamento cancelado.");
     if (!opts.viaInvoice && "invoiceId" in e && e.invoiceId)
       throw new AppError("Este lançamento está consolidado em uma fatura de fornecedor. Registre o pagamento pela fatura.");
-    const balance = e.amountCents - e.settledCents;
+    let amount = e.amountCents;
+    if (d.newTotalCents && d.newTotalCents !== e.amountCents) {
+      if (opts.viaInvoice || ("invoiceId" in e && e.invoiceId))
+        throw new AppError("Este lançamento está em uma fatura de fornecedor: o valor é o da fatura.");
+      if (e.sourceKey) throw new AppError("Este lançamento foi gerado por uma venda. Altere o valor pela própria venda.");
+      if (d.newTotalCents < e.settledCents)
+        throw new AppError(`O valor da conta não pode ser menor que o já pago (${money(e.settledCents)}).`);
+      await model.update({ where: { id }, data: { amountCents: d.newTotalCents } });
+      await audit(tx, ctx, kind === "receivable" ? "receber.valor_ajustado" : "pagar.valor_ajustado", kind === "receivable" ? "Receivable" : "Payable", id, {
+        antes: e.amountCents,
+        depois: d.newTotalCents,
+        via: "baixa",
+      });
+      amount = d.newTotalCents;
+    }
+    const balance = amount - e.settledCents;
     if (balance <= 0) throw new AppError("Lançamento já está quitado.");
     if (principal > balance)
       throw new AppError(`O valor abatido (${money(principal)}) é maior que o saldo em aberto (${money(balance)}).`);
@@ -373,9 +470,14 @@ export async function settleEntryTx(
         notes: d.notes,
         createdById: ctx.userId,
         cardInstallments,
+        autoKey: d.autoKey ?? null,
       },
     });
-    if (isCard) await applyCardCharge(tx, ctx, account, s, ("description" in e ? String(e.description) : "Pagamento").slice(0, 120));
+    if (isCard)
+      await applyCardCharge(tx, ctx, account, s, ("description" in e ? String(e.description) : "Pagamento").slice(0, 120), {
+        firstMonth: d.cardFirstBillMonth ?? null,
+        startInstallment: d.cardStartInstallment ?? 1,
+      });
     const after = await recomputeEntry(tx, kind, id);
     await afterSettlementChange(tx, ctx, kind, id, s.id, "baixa");
     await audit(tx, ctx, kind === "receivable" ? "receber.baixa" : "pagar.baixa", kind === "receivable" ? "Receivable" : "Payable", id, {
@@ -395,14 +497,103 @@ export async function reverseSettlement(ctx: Ctx, settlementId: string, reason: 
     const s = await tx.settlement.findFirst({ where: { id: settlementId, companyId: ctx.companyId } });
     if (!s) throw new AppError("Baixa não encontrada.", "NOT_FOUND");
     if (s.reversedAt) throw new AppError("Esta baixa já foi estornada.");
-    await reverseCardCharge(tx, s);
-    await tx.settlement.update({ where: { id: s.id }, data: { reversedAt: new Date(), reversalReason: reason.trim() } });
-    await tx.bankStatementLine.updateMany({ where: { settlementId: s.id }, data: { status: "PENDENTE", settlementId: null } });
+    await reverseSettlementTx(tx, ctx, s, reason.trim());
     const kind: EntryKind = s.receivableId ? "receivable" : "payable";
     const entryId = (s.receivableId ?? s.payableId)!;
-    await recomputeEntry(tx, kind, entryId);
-    await afterSettlementChange(tx, ctx, kind, entryId, s.id, "estorno");
-    await audit(tx, ctx, "baixa.estornada", "Settlement", s.id, { reason, amountCents: s.amountCents });
+    const saleCancelled = await closeEntryOfCancelledSale(tx, ctx, kind, entryId);
+    // Compra no cartão lançada pela venda e estornada à mão: o produto passa a "a agência paga depois",
+    // para a próxima edição da venda não lançar a compra no cartão de novo (em venda cancelada não há edição).
+    const itemId = s.autoKey?.startsWith("venda-cartao:") ? s.autoKey.slice("venda-cartao:".length) : null;
+    if (itemId && !saleCancelled) {
+      const changed = await tx.saleItem.updateMany({ where: { id: itemId, companyId: ctx.companyId, supplierPayment: "CARTAO_AGENCIA" }, data: { supplierPayment: "FATURADO" } });
+      if (changed.count && s.payableId) await tx.payable.update({ where: { id: s.payableId }, data: { method: "BOLETO" } });
+      if (changed.count) await audit(tx, ctx, "venda.fornecedor_cartao_estornado", "SaleItem", itemId, { settlementId: s.id, reason });
+    }
+  });
+}
+
+/**
+ * Estorno à mão de uma baixa de venda já cancelada: a conta não pode voltar a ficar em aberto
+ * (ninguém conseguiria cancelá-la depois). Mesma regra do cancelamento da venda: sem nada baixado,
+ * a conta é cancelada; com baixa parcial, o saldo é encerrado e fica só o que foi pago.
+ * Devolve true quando a conta é de venda cancelada.
+ */
+async function closeEntryOfCancelledSale(tx: Tx, ctx: Ctx, kind: EntryKind, entryId: string) {
+  const model = entryDelegate(tx, kind);
+  const [e] = await model.findMany({ where: { id: entryId } });
+  const saleId = (e as { saleId?: string | null } | undefined)?.saleId;
+  if (!e || !saleId) return false;
+  const sale = await tx.sale.findUnique({ where: { id: saleId }, select: { status: true } });
+  if (sale?.status !== "CANCELADA") return false;
+  if (e.status === "CANCELADO") return true;
+  if (e.settledCents === 0) {
+    await model.update({ where: { id: entryId }, data: { status: "CANCELADO", cancelledAt: new Date() } });
+  } else if (e.settledCents < e.amountCents) {
+    const t = today(ctx);
+    await model.update({
+      where: { id: entryId },
+      data: {
+        amountCents: e.settledCents,
+        status: "PAGO",
+        notes: `${e.notes ? e.notes + "\n" : ""}Saldo de ${money(e.amountCents - e.settledCents)} encerrado no estorno em ${t.split("-").reverse().join("/")}: venda cancelada.`,
+      },
+    });
+  } else return true;
+  await afterSettlementChange(tx, ctx, kind, entryId, "", "estorno");
+  await audit(tx, ctx, `${kind === "receivable" ? "receber" : "pagar"}.cancelado`, kind === "receivable" ? "Receivable" : "Payable", entryId, { via: "estorno de venda cancelada" });
+  return true;
+}
+
+/**
+ * Estorno de uma baixa dentro de uma transação existente, sem checar permissão (a venda usa para
+ * refazer as compras no cartão que ela mesma lançou). Bloqueia se a fatura do cartão já foi paga.
+ */
+export async function reverseSettlementTx(tx: Tx, ctx: Ctx, s: { id: string; receivableId: string | null; payableId: string | null; amountCents: number; cardBillsJson: string | null }, reason: string) {
+  await reverseCardCharge(tx, s);
+  await tx.settlement.update({ where: { id: s.id }, data: { reversedAt: new Date(), reversalReason: reason } });
+  await tx.bankStatementLine.updateMany({ where: { settlementId: s.id }, data: { status: "PENDENTE", settlementId: null } });
+  const kind: EntryKind = s.receivableId ? "receivable" : "payable";
+  const entryId = (s.receivableId ?? s.payableId)!;
+  await recomputeEntry(tx, kind, entryId);
+  await afterSettlementChange(tx, ctx, kind, entryId, s.id, "estorno");
+  await audit(tx, ctx, "baixa.estornada", "Settlement", s.id, { reason, amountCents: s.amountCents });
+}
+
+/**
+ * Lançamento antigo feito à mão com a categoria "Fatura do cartão": não estava ligado a nenhum cartão.
+ * Troca para a categoria real da despesa e paga com o cartão, na fatura escolhida.
+ */
+export async function linkPayableToCard(ctx: Ctx, payableId: string, raw: unknown) {
+  assertCan(ctx, "finance.manage");
+  const d = linkToCardSchema.parse(raw);
+  if (d.category === CARD_BILL_CATEGORY) throw new AppError("Escolha a categoria da despesa (ex.: Fornecedores).");
+  await assertPayableCategory(prisma as unknown as Tx, ctx.companyId, d.category);
+  return prisma.$transaction(async (tx) => {
+    const p = await tx.payable.findFirst({ where: { id: payableId, companyId: ctx.companyId } });
+    if (!p) throw new AppError("Lançamento não encontrado.", "NOT_FOUND");
+    if (p.status === "CANCELADO") throw new AppError("Lançamento cancelado.");
+    if (p.origin === "CARTAO") throw new AppError("Esta já é a fatura do cartão.");
+    if (p.sourceKey) throw new AppError("Esta conta foi gerada pelo sistema. Use Registrar pagamento e escolha o cartão.");
+    if (p.category !== CARD_BILL_CATEGORY)
+      throw new AppError("Só lançamentos com a categoria Fatura do cartão precisam ser ligados. Para as outras contas, use Registrar pagamento e escolha o cartão.");
+    if (p.invoiceId) throw new AppError("Remova o lançamento da fatura do fornecedor antes.");
+    const paid = await tx.settlement.count({ where: { payableId: p.id, reversedAt: null } });
+    if (paid > 0 || p.settledCents > 0) throw new AppError("Esta conta já tem pagamento registrado. Estorne o pagamento antes de ligar ao cartão.");
+    const card = await tx.financialAccount.findFirst({ where: { id: d.accountId, companyId: ctx.companyId, active: true, type: "CARTAO_CREDITO" } });
+    if (!card) throw new AppError("Conta financeira inválida.");
+    if (!card.closingDay || !card.dueDay) throw new AppError(`Informe o dia de fechamento e o dia de vencimento do cartão "${card.name}" em Contas e saldos.`);
+    const [bill] = cardBillScheduleFrom(d.billMonth, card.closingDay, card.dueDay, 1);
+    await tx.payable.update({ where: { id: p.id }, data: { category: d.category, method: "CARTAO_CREDITO" } });
+    const r = await settleEntryTx(
+      tx,
+      ctx,
+      "payable",
+      p.id,
+      { date: bill.closingDate, amountCents: p.amountCents, interestCents: 0, discountCents: 0, accountId: card.id, cardInstallments: 1, cardFirstBillMonth: d.billMonth },
+      { viaInvoice: false },
+    );
+    await audit(tx, ctx, "pagar.ligado_cartao", "Payable", p.id, { accountId: card.id, fatura: d.billMonth, categoriaAntes: p.category, categoria: d.category, settlementId: r.settlementId });
+    return r;
   });
 }
 
@@ -722,7 +913,7 @@ export async function registerAttachment(
       // completa o cadastro com o número do documento, sem sobrescrever o que já foi digitado
       const c = await tx.client.findUniqueOrThrow({ where: { id: target.id }, select: { rg: true, passportNumber: true, passportExpiry: true } });
       if (kind === "RG" && !c.rg) await tx.client.update({ where: { id: target.id }, data: { rg: docNumber } });
-      if (kind === "PASSAPORTE" && !c.passportNumber) await tx.client.update({ where: { id: target.id }, data: { passportNumber: docNumber, passportExpiry: c.passportExpiry ?? docExpiry } });
+      if (kind === "PASSAPORTE" && !c.passportNumber) await tx.client.update({ where: { id: target.id }, data: { passportNumber: normalizeDocCode(docNumber), passportExpiry: c.passportExpiry ?? docExpiry } });
     }
     await audit(tx, ctx, "anexo.enviado", "Attachment", a.id, { target, kind });
     return a.id;
@@ -760,7 +951,7 @@ export async function deleteClientDocument(ctx: Ctx, id: string) {
 
 export async function financeOptions(ctx: Ctx) {
   const [accounts, clients, suppliers, costCenters, cats] = await Promise.all([
-    prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true, type: true }, orderBy: { name: "asc" } }),
+    prisma.financialAccount.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true, type: true, closingDay: true, dueDay: true }, orderBy: { name: "asc" } }),
     prisma.client.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" }, take: 500 }),
     prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.costCenter.findMany({ where: { companyId: ctx.companyId, active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),

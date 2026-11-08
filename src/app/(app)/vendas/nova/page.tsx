@@ -9,6 +9,7 @@ import { str, type SearchParams } from "@/lib/params";
 import { clientScope } from "@/server/services/registry";
 import { activeRules } from "@/server/services/catalog";
 import { excursionOptions } from "@/server/services/excursions";
+import { cardOptions } from "@/server/services/cards";
 
 export const metadata = { title: "Nova venda" };
 
@@ -18,13 +19,14 @@ export default async function NewSalePage({ searchParams }: { searchParams: Sear
   const tripParam = str(sp, "viagem");
   const trip = tripParam ? await prisma.trip.findFirst({ where: { id: tripParam, companyId: ctx.companyId }, select: { id: true, clientId: true, destination: true } }) : null;
   const clientId = trip?.clientId ?? str(sp, "cliente");
-  const [suppliers, sellers, me, client, rules, excursions] = await Promise.all([
+  const [suppliers, sellers, me, client, rules, excursions, agencyCards] = await Promise.all([
     supplierOptions(ctx),
     sellerOptions(ctx),
     prisma.user.findUniqueOrThrow({ where: { id: ctx.userId }, select: { commissionRateBps: true } }),
     clientId ? prisma.client.findFirst({ where: { AND: [{ id: clientId }, clientScope(ctx)] }, select: { id: true, name: true, document: true, whatsapp: true } }) : null,
     activeRules(ctx),
     excursionOptions(ctx),
+    cardOptions(ctx),
   ]);
   const exc = excursions.find((e) => e.id === str(sp, "excursao"));
   const t = today(ctx);
@@ -38,6 +40,7 @@ export default async function NewSalePage({ searchParams }: { searchParams: Sear
         showMargin={can(ctx, "sales.view_margin")}
         rules={rules}
         excursions={excursions}
+        agencyCards={agencyCards}
         initial={{
           saleDate: t,
           client,

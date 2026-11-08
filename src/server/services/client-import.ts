@@ -1,7 +1,7 @@
 /**
  * Importação de clientes (planilha CSV e Monde). Regra comum: nunca apaga nem sobrescreve o que
  * já foi digitado na gestão; só completa campos vazios. Encontra o cliente existente pelo id do
- * Monde, pelo CPF/CNPJ ou pelo e-mail.
+ * Monde, pelo CPF/CNPJ, pelo passaporte ou pelo e-mail.
  */
 import Papa from "papaparse";
 import { prisma, type Tx } from "../db";
@@ -9,6 +9,7 @@ import { assertCan, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
 import { isValidDocument, onlyDigits } from "@/lib/utils";
+import { isBrazilianNationality, normalizeDocCode, normalizeGender } from "@/lib/client-identity";
 
 export type ImportedClient = {
   name: string;
@@ -29,6 +30,9 @@ export type ImportedClient = {
   passportExpiry?: string | null;
   notes?: string | null;
   tradeName?: string | null;
+  gender?: string | null;
+  nationality?: string | null;
+  rne?: string | null;
 };
 export type ImportOutcome = "criado" | "atualizado" | "sem_mudanca";
 
@@ -58,6 +62,11 @@ function normalize(c: ImportedClient) {
   const document = digits && isValidDocument(digits) ? digits : null;
   const email = clean(c.email, 150)?.toLowerCase() ?? null;
   const state = clean(c.state, 2)?.toUpperCase() ?? null;
+  const nationality = clean(c.nationality, 60);
+  const rne = normalizeDocCode(clean(c.rne, 30))?.slice(0, 20) ?? null;
+  const pj = document?.length === 14;
+  // estrangeiro: tem RNE ou nacionalidade que não é brasileira (o Monde não informa nenhum dos dois)
+  const foreigner = !pj && (!!rne || (!!nationality && !isBrazilianNationality(nationality)));
   return {
     data: {
       name: clean(c.name, 150) ?? "",
@@ -76,9 +85,13 @@ function normalize(c: ImportedClient) {
       district: clean(c.district, 80),
       city: clean(c.city, 80),
       state: state && /^[A-Z]{2}$/.test(state) ? state : null,
-      passportNumber: clean(c.passportNumber, 20),
+      passportNumber: normalizeDocCode(clean(c.passportNumber, 30))?.slice(0, 20) ?? null,
       passportExpiry: parseDate(c.passportExpiry),
       notes: clean(c.notes, 2000),
+      gender: pj ? null : normalizeGender(c.gender),
+      nationality: pj ? null : nationality,
+      rne: pj ? null : rne,
+      foreigner,
     },
     invalidDocument: !!digits && !document,
   };
@@ -91,6 +104,7 @@ export async function upsertImportedClient(tx: Tx, ctx: Ctx, input: ImportedClie
   const or = [
     ...(opts.mondeId ? [{ mondeId: opts.mondeId }] : []),
     ...(data.document ? [{ document: data.document }] : []),
+    ...(data.passportNumber ? [{ passportNumber: data.passportNumber }] : []),
     ...(data.email ? [{ email: data.email }] : []),
   ];
   // sem CPF nem e-mail: procura pelo nome exato (evita duplicar ao reimportar a mesma planilha)
@@ -100,12 +114,19 @@ export async function upsertImportedClient(tx: Tx, ctx: Ctx, input: ImportedClie
   if (existing) {
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(data)) {
-      if (k === "personType" || v == null || v === "") continue;
+      if (k === "personType" || k === "foreigner" || v == null || v === "") continue;
       const cur = (existing as Record<string, unknown>)[k];
       if (cur == null || cur === "") patch[k] = v;
     }
+    // estrangeiro só é marcado (nunca desmarcado) pela importação
+    if (data.foreigner && !existing.foreigner && existing.personType !== "PJ") patch.foreigner = true;
     // CPF de outro cliente não pode ser reaproveitado (único por agência)
     if (patch.document && (await tx.client.findFirst({ where: { companyId: ctx.companyId, document: patch.document as string, id: { not: existing.id } } }))) delete patch.document;
+    // passaporte que já é de outro cliente também não é copiado
+    if (patch.passportNumber && (await tx.client.findFirst({ where: { companyId: ctx.companyId, passportNumber: patch.passportNumber as string, id: { not: existing.id } } }))) {
+      delete patch.passportNumber;
+      delete patch.passportExpiry;
+    }
     if (opts.mondeId && !existing.mondeId) patch.mondeId = opts.mondeId;
     if (!Object.keys(patch).length) return { outcome: "sem_mudanca", id: existing.id, warning };
     await tx.client.update({ where: { id: existing.id }, data: patch });
@@ -136,6 +157,9 @@ const ALIASES: Record<keyof ImportedClient, string[]> = {
   passportNumber: ["passaporte", "numero do passaporte", "n passaporte"],
   passportExpiry: ["validade do passaporte", "validade passaporte", "vencimento passaporte"],
   notes: ["observacoes", "observacao", "obs"],
+  gender: ["sexo", "genero"],
+  nationality: ["nacionalidade", "pais de origem"],
+  rne: ["rne", "rnm", "crnm", "rne/rnm", "rne / rnm", "rne rnm"],
 };
 const norm = (h: string) => h.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
 

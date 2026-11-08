@@ -3,7 +3,7 @@ import { prisma } from "../db";
 import { can, type Ctx } from "../context";
 import { textContains } from "./query";
 import { saleScope } from "./sales";
-import { clientScope } from "./registry";
+import { clientScope, docCodeFilters } from "./registry";
 import { tripScope } from "./trips";
 import { onlyDigits } from "@/lib/utils";
 import { formatBRL } from "@/lib/money";
@@ -36,7 +36,7 @@ export async function globalSearch(ctx: Ctx, raw: string): Promise<SearchHit[]> 
       where: {
         AND: [
           clientScope(ctx),
-          { OR: [{ name: textContains(q) }, { email: textContains(q) }, ...(digits.length >= 3 ? [{ document: { contains: digits } }, { whatsapp: { contains: digits } }] : [])] },
+          { OR: [{ name: textContains(q) }, { email: textContains(q) }, ...(digits.length >= 3 ? [{ document: { contains: digits } }, { whatsapp: { contains: digits } }] : []), ...docCodeFilters(q)] },
         ],
       },
       select: { id: true, name: true, email: true, whatsapp: true },

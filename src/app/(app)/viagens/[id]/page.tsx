@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, ShoppingBag, Users, Ticket, Paperclip, Building2, Wallet } from "lucide-react";
+import { Plus, ShoppingBag, Users, Ticket, Paperclip, Building2, Wallet, FileSignature } from "lucide-react";
 import { orNotFound } from "@/server/page-helpers";
 import { requirePageContext } from "@/server/auth";
 import { can } from "@/server/context";
@@ -10,9 +10,11 @@ import { AttachmentsPanel } from "@/components/attachments";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { PRODUCT_TYPES } from "@/lib/constants";
-import { maskDocument, maskPassport, formatDocument } from "@/lib/utils";
+import { maskDocument, maskPassport } from "@/lib/utils";
+import { clientDocHint } from "@/lib/client-identity";
 import type { Params } from "@/lib/params";
 import { TripActions, UnlinkSaleButton } from "../trip-client";
+import { GenerateTripContractButton } from "@/components/trip-contract-button";
 
 export const metadata = { title: "Viagem" };
 
@@ -113,7 +115,17 @@ export default async function TripPage({ params }: { params: Params }) {
                       <Td>
                         <FinancialStatusBadge s={s.financialStatus} />
                       </Td>
-                      <Td>{s.contracts[0] ? <ContractStatusBadge s={s.contracts[0].status} /> : <span className="text-xs text-muted">—</span>}</Td>
+                      <Td>
+                        {trip.pendingSaleIds.includes(s.id) ? (
+                          <Badge tone="amber">Entra ao atualizar a prévia</Badge>
+                        ) : trip.coveredSaleIds.includes(s.id) ? (
+                          <Badge tone="blue">No contrato da viagem</Badge>
+                        ) : s.contracts[0] ? (
+                          <ContractStatusBadge s={s.contracts[0].status} />
+                        ) : (
+                          <span className="text-xs text-muted">—</span>
+                        )}
+                      </Td>
                       <Td align="right">{(s.sellerId === ctx.userId || can(ctx, "sales.edit_all")) && <UnlinkSaleButton saleId={s.id} />}</Td>
                     </tr>
                   ))}
@@ -165,11 +177,44 @@ export default async function TripPage({ params }: { params: Params }) {
         </div>
 
         <div className="space-y-6">
+          {can(ctx, "contracts.manage") && (trip.tripContract || trip.sales.some((s) => s.status === "CONFIRMADA" || s.status === "CONCLUIDA")) && (
+            <Card>
+              <CardHeader title="Contrato da viagem" icon={FileSignature} />
+              <div className="space-y-3 p-5 text-sm">
+                {trip.tripContract ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ContractStatusBadge s={trip.tripContract.status} />
+                      {trip.tripContract.version > 0 && <span className="text-xs text-muted">versão {trip.tripContract.version}</span>}
+                    </div>
+                    {trip.tripContract.status === "CANCELADO" && <p className="text-xs text-amber-700">Contrato cancelado. Abra o contrato para reabrir, ou prepare o contrato em cada venda.</p>}
+                    {trip.tripContract.outdated && <p className="text-xs text-amber-700">Uma venda da viagem foi alterada, incluída ou retirada depois da emissão.</p>}
+                    {trip.tripContract.includedCodes.length > 0 && <p className="text-slate-700">Vendas neste contrato: {trip.tripContract.includedCodes.join(", ")}</p>}
+                    {trip.tripContract.outsideCodes.length > 0 && (
+                      <p className="text-xs text-muted">Ficaram de fora porque já tinham contrato enviado ao cliente: {trip.tripContract.outsideCodes.join(", ")}</p>
+                    )}
+                    <LinkButton href={`/contratos/${trip.tripContract.id}`} variant="secondary" className="w-full">
+                      Abrir contrato da viagem
+                    </LinkButton>
+                  </>
+                ) : trip.canGenerateTripContract ? (
+                  <>
+                    <p className="text-slate-700">Você pode juntar as vendas desta viagem em um contrato só, com todos os produtos, fornecedores, pagamentos e passageiros.</p>
+                    <GenerateTripContractButton tripId={trip.id} codes={trip.joinableSaleCodes} className="w-full" />
+                  </>
+                ) : (
+                  <p className="text-muted">
+                    Para juntar em um contrato só, a viagem precisa de pelo menos 2 vendas confirmadas que ainda não tiveram contrato enviado. Cada venda segue com o contrato dela.
+                  </p>
+                )}
+              </div>
+            </Card>
+          )}
           <Card>
             <CardHeader title="Cliente" action={<Link href={`/clientes/${trip.client.id}`} className="text-xs font-medium text-brand-600 hover:underline">Ver cadastro</Link>} />
             <div className="space-y-1 p-5 text-sm">
               <p className="font-semibold text-ink">{trip.client.name}</p>
-              <p className="text-muted">{trip.client.document ? formatDocument(trip.client.document) : "CPF/CNPJ não informado"}</p>
+              <p className="text-muted">{clientDocHint(trip.client) ?? "Documento não informado"}</p>
               <p className="text-muted">{trip.client.whatsapp ?? trip.client.phone ?? "—"}</p>
               {trip.client.email && <p className="text-muted">{trip.client.email}</p>}
             </div>

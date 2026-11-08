@@ -1,10 +1,11 @@
 "use client";
 import { useState } from "react";
 import { ShieldCheck, User, Building } from "lucide-react";
-import { Button, Field, Input, Textarea } from "@/components/ui";
+import { Button, Field, Input, Select, Textarea } from "@/components/ui";
 import { useAction, issuesToMap } from "@/components/use-action";
 import { saveClientAction } from "@/app/actions";
 import { cn, formatDocument } from "@/lib/utils";
+import { GENDERS } from "@/lib/constants";
 
 export type ClientFormData = {
   personType: string;
@@ -14,6 +15,10 @@ export type ClientFormData = {
   rg: string | null;
   passportNumber: string | null;
   passportExpiry: string | null;
+  foreigner: boolean;
+  nationality: string | null;
+  rne: string | null;
+  gender: string | null;
   specialNeeds: string | null;
   phone: string | null;
   whatsapp: string | null;
@@ -38,6 +43,10 @@ const empty: ClientFormData = {
   rg: "",
   passportNumber: "",
   passportExpiry: "",
+  foreigner: false,
+  nationality: "",
+  rne: "",
+  gender: "",
   specialNeeds: "",
   phone: "",
   whatsapp: "",
@@ -71,8 +80,9 @@ export function ClientForm({
   const [d, setD] = useState<ClientFormData>({ ...base, document: initial?.document ? formatDocument(initial.document) : "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { run, busy } = useAction();
-  const set = (k: keyof ClientFormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setD({ ...d, [k]: e.target.value });
+  const set = (k: keyof ClientFormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setD({ ...d, [k]: e.target.value });
   const pj = d.personType === "PJ";
+  const foreigner = !pj && d.foreigner;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,7 +102,7 @@ export function ClientForm({
             type="button"
             role="radio"
             aria-checked={d.personType === v}
-            onClick={() => setD({ ...d, personType: v })}
+            onClick={() => setD({ ...d, personType: v, foreigner: v === "PJ" ? false : d.foreigner })}
             className={cn("inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors", d.personType === v ? "bg-white text-brand-700 shadow-sm" : "text-muted hover:text-ink")}
           >
             <Icon className="h-3.5 w-3.5" /> {label}
@@ -108,50 +118,97 @@ export function ClientForm({
             <Input value={d.tradeName ?? ""} onChange={set("tradeName")} />
           </Field>
         )}
-        <Field label={pj ? "CNPJ" : "CPF"} error={errors.document} hint="Necessário para emitir contrato.">
-          <Input value={d.document ?? ""} onChange={set("document")} inputMode="numeric" />
-        </Field>
-        <Field label="WhatsApp" error={errors.whatsapp}>
+        {!pj && (
+          <label className="flex items-start gap-2 rounded-xl border border-line px-3 py-2.5 text-sm text-slate-700 sm:col-span-2">
+            <input type="checkbox" className="mt-0.5 accent-brand-600" checked={d.foreigner} onChange={(e) => setD({ ...d, foreigner: e.target.checked })} />
+            <span>
+              <span className="font-medium">Cliente estrangeiro (não é brasileiro)</span>
+              <span className="block text-xs text-muted">Marque para cadastrar com passaporte ou RNE no lugar do CPF.</span>
+            </span>
+          </label>
+        )}
+        <Field label="Celular / WhatsApp" error={errors.whatsapp}>
           <Input value={d.whatsapp ?? ""} onChange={set("whatsapp")} inputMode="tel" placeholder="(42) 99999-0000" />
         </Field>
-        <Field label="E-mail" error={errors.email}>
+        <Field label="Telefone fixo" error={errors.phone}>
+          <Input value={d.phone ?? ""} onChange={set("phone")} inputMode="tel" />
+        </Field>
+        <Field label="E-mail" error={errors.email} className="sm:col-span-2">
           <Input type="email" value={d.email ?? ""} onChange={set("email")} />
         </Field>
-        {!compact && (
-          <>
-            <Field label="Telefone">
-              <Input value={d.phone ?? ""} onChange={set("phone")} inputMode="tel" />
+      </div>
+      <fieldset className="rounded-xl border border-line px-4 py-3">
+        <legend className="px-1 text-sm font-medium text-slate-700">Documentos</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {pj && (
+            <Field label="CNPJ" error={errors.document} hint="Necessário para emitir contrato." className="sm:col-span-2">
+              <Input value={d.document ?? ""} onChange={set("document")} inputMode="numeric" />
             </Field>
-            {!pj && (
+          )}
+          {foreigner && (
+            <>
+              <Field label="Nacionalidade" error={errors.nationality}>
+                <Input value={d.nationality ?? ""} onChange={set("nationality")} placeholder="Ex.: Argentina" />
+              </Field>
+              <Field label="Passaporte" error={errors.passportNumber}>
+                <Input value={d.passportNumber ?? ""} onChange={set("passportNumber")} autoComplete="off" />
+              </Field>
+              <Field label="Validade do passaporte" error={errors.passportExpiry} hint="Avisamos se vencer em menos de 6 meses de uma viagem.">
+                <Input type="date" value={d.passportExpiry ?? ""} onChange={set("passportExpiry")} />
+              </Field>
+              <Field label="RNE / RNM" error={errors.rne} hint="Registro de estrangeiro que mora no Brasil.">
+                <Input value={d.rne ?? ""} onChange={set("rne")} autoComplete="off" />
+              </Field>
+              <Field label="CPF (se tiver)" error={errors.document} hint="Opcional. Sem CPF, o contrato usa o passaporte ou o RNE.">
+                <Input value={d.document ?? ""} onChange={set("document")} inputMode="numeric" />
+              </Field>
+            </>
+          )}
+          {!pj && !foreigner && (
+            <>
+              <Field label="CPF" error={errors.document} hint="Necessário para emitir contrato.">
+                <Input value={d.document ?? ""} onChange={set("document")} inputMode="numeric" />
+              </Field>
+              <Field label="RG" error={errors.rg}>
+                <Input value={d.rg ?? ""} onChange={set("rg")} autoComplete="off" />
+              </Field>
+              <Field label="Passaporte" error={errors.passportNumber}>
+                <Input value={d.passportNumber ?? ""} onChange={set("passportNumber")} autoComplete="off" />
+              </Field>
+              <Field label="Validade do passaporte" error={errors.passportExpiry} hint="Avisamos se vencer em menos de 6 meses de uma viagem.">
+                <Input type="date" value={d.passportExpiry ?? ""} onChange={set("passportExpiry")} />
+              </Field>
+            </>
+          )}
+          {!pj && (
+            <>
               <Field label="Data de nascimento" error={errors.birthDate}>
                 <Input type="date" value={d.birthDate ?? ""} onChange={set("birthDate")} />
               </Field>
-            )}
-          </>
-        )}
-      </div>
-      {!compact && !pj && (
-        <details className="rounded-xl border border-line px-4 py-3" open={!!(d.rg || d.passportNumber || d.specialNeeds)}>
-          <summary className="cursor-pointer text-sm font-medium text-slate-700">Documentos de viagem (opcional)</summary>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <Field label="RG">
-              <Input value={d.rg ?? ""} onChange={set("rg")} autoComplete="off" />
-            </Field>
-            <Field label="Passaporte">
-              <Input value={d.passportNumber ?? ""} onChange={set("passportNumber")} autoComplete="off" />
-            </Field>
-            <Field label="Validade do passaporte" error={errors.passportExpiry} hint="Alertamos se vencer em menos de 6 meses de uma viagem.">
-              <Input type="date" value={d.passportExpiry ?? ""} onChange={set("passportExpiry")} />
-            </Field>
-            <Field label="Necessidades especiais / restrições" className="sm:col-span-3">
+              <Field label="Sexo" error={errors.gender}>
+                <Select value={d.gender ?? ""} onChange={set("gender")}>
+                  <option value="">Não informado</option>
+                  {GENDERS.values.map((g) => (
+                    <option key={g} value={g}>
+                      {GENDERS.label(g)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </>
+          )}
+          {!pj && !compact && (
+            <Field label="Necessidades especiais / restrições" className="sm:col-span-2">
               <Input value={d.specialNeeds ?? ""} onChange={set("specialNeeds")} placeholder="Ex.: mobilidade reduzida, restrição alimentar" />
             </Field>
-          </div>
+          )}
+        </div>
+        {!pj && (
           <p className="mt-2 flex items-center gap-1 text-[11px] text-muted">
-            <ShieldCheck className="h-3 w-3" /> Dados sensíveis: colete apenas quando o produto exigir. São exibidos mascarados.
+            <ShieldCheck className="h-3 w-3" /> Dados sensíveis: colete só o necessário. Passaporte e RNE aparecem mascarados nas telas.
           </p>
-        </details>
-      )}
+        )}
+      </fieldset>
       <details className="rounded-xl border border-line px-4 py-3" open={!compact}>
         <summary className="cursor-pointer text-sm font-medium text-slate-700">Endereço (usado no contrato)</summary>
         <div className="mt-3 grid gap-3 sm:grid-cols-6">

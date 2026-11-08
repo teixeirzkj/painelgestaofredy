@@ -29,19 +29,45 @@ export const PasswordInput = React.forwardRef<HTMLInputElement, Omit<React.Input
 export function MoneyInput({ value, onChange, className, ...rest }: { value: number | null | undefined; onChange: (cents: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const [text, setText] = React.useState(centsToInput(value ?? 0));
   const focused = React.useRef(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const selectAfter = React.useRef(false);
   React.useEffect(() => {
-    if (!focused.current) setText(centsToInput(value ?? 0));
+    if (!focused.current) {
+      setText(centsToInput(value ?? 0));
+      return;
+    }
+    // Valor trocado por fora enquanto o campo tem foco (ex.: atalho "Pagar só uma parte" zerando o campo):
+    // zero vira campo vazio e outro valor fica selecionado, para o que for digitado substituir em vez de ir para o fim.
+    const typed = text.trim() === "" ? 0 : parseBRL(text);
+    if (typed !== (value ?? 0)) {
+      if (!value) setText("");
+      else {
+        setText(centsToInput(value));
+        selectAfter.current = true;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
+  React.useEffect(() => {
+    if (selectAfter.current) {
+      selectAfter.current = false;
+      inputRef.current?.select();
+    }
+  }, [text]);
   return (
     <div className={cn("relative", className)}>
       <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted">R$</span>
       <Input
+        ref={inputRef}
         inputMode="decimal"
         className="pl-9 text-right tabular"
         value={text}
+        placeholder="0,00"
         onFocus={(e) => {
           focused.current = true;
-          e.currentTarget.select();
+          // zerado: começa vazio (clicar no meio do "0,00" faria o número digitado sair errado)
+          if (!value) setText("");
+          else e.currentTarget.select();
         }}
         onBlur={() => {
           focused.current = false;

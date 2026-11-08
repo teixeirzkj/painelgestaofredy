@@ -151,8 +151,8 @@ export default async function BalcaoInicioPage({ searchParams }: { searchParams:
           n={2}
           title="Cadastrar ou conferir o cliente"
           steps={[
-            "Busque o cliente pelo nome, CPF ou telefone.",
-            "Se não achar, cadastre o cliente novo. Para o contrato precisa de CPF/CNPJ e endereço completo.",
+            "Busque o cliente pelo nome, CPF, telefone ou passaporte.",
+            "Se não achar, cadastre o cliente novo. Para o contrato precisa de CPF/CNPJ (ou passaporte/RNE, se for estrangeiro) e endereço completo.",
           ]}
         />
         <ClientPicker

@@ -1,9 +1,8 @@
 /** PDF do contrato emitido (download no popup e envio pela conversa do Frédy). */
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
-import { prisma } from "@/server/db";
 import { assertCan, type Ctx } from "@/server/context";
 import { AppError } from "@/server/errors";
-import { saleScope } from "./sales";
+import { contractLabel, getContract } from "./contracts";
 
 const ISSUED = ["AGUARDANDO_ENVIO", "ENVIADO", "ASSINADO"];
 
@@ -46,15 +45,14 @@ function wrap(line: string, font: PDFFont, size: number, max: number) {
 
 export async function contractPdf(ctx: Ctx, id: string) {
   assertCan(ctx, "contracts.manage");
-  const c = await prisma.contract.findFirst({
-    where: { id, companyId: ctx.companyId, sale: saleScope(ctx) },
-    select: { content: true, status: true, sale: { select: { code: true, client: { select: { name: true } } } } },
-  });
-  if (!c || !c.content) throw new AppError("Contrato não encontrado.", "NOT_FOUND");
+  // getContract aplica a visibilidade (venda do vendedor ou contrato da viagem em que ele tem venda)
+  const c = await getContract(ctx, id);
+  if (!c.content) throw new AppError("Contrato não encontrado.", "NOT_FOUND");
+  const label = contractLabel(c);
   if (!ISSUED.includes(c.status)) throw new AppError("Emita o contrato antes de baixar ou enviar.", "CONFLICT");
 
   const pdf = await PDFDocument.create();
-  pdf.setTitle(`Contrato ${c.sale.code}`);
+  pdf.setTitle(`Contrato ${label}`);
   const font = await pdf.embedFont(StandardFonts.TimesRoman);
   const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
   const W = 595.28, H = 841.89, M = 56, size = 11, lead = 15.5;
@@ -73,8 +71,8 @@ export async function contractPdf(ctx: Ctx, id: string) {
   });
   const pages = pdf.getPages();
   pages.forEach((p, i) => {
-    const t = latin(`${c.sale.code} - página ${i + 1} de ${pages.length}`);
+    const t = latin(`${label} - página ${i + 1} de ${pages.length}`);
     p.drawText(t, { x: W - M - font.widthOfTextAtSize(t, 8), y: M / 2, size: 8, font, color: rgb(0.45, 0.48, 0.55) });
   });
-  return { bytes: await pdf.save(), fileName: `Contrato ${c.sale.code} - ${c.sale.client.name}.pdf` };
+  return { bytes: await pdf.save(), fileName: `Contrato ${label} - ${c.sale.client.name}.pdf` };
 }

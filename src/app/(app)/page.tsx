@@ -347,7 +347,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-ink">{c.sale.client.name}</span>
                       <span className="block truncate text-xs text-muted">
-                        {c.sale.code}
+                        {c.trip ? `Viagem ${c.trip.code}` : c.sale.code}
                         {c.missing > 0 && ` · ${c.missing} dado(s) obrigatório(s) faltando`}
                       </span>
                     </span>

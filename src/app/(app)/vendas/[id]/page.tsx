@@ -4,6 +4,7 @@ import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { getSale, getSaleAudit } from "@/server/services/sales";
+import { contractNeverSent, effectiveContract } from "@/server/services/contracts";
 import { supplierOptions } from "@/server/services/registry";
 import { Card, CardHeader, DataList, LinkButton, Notice, PageHeader, Table, Td, Th, Badge } from "@/components/ui";
 import { ContractStatusBadge, EntryStatusBadge, FinancialStatusBadge, SaleStatusBadge } from "@/components/status";
@@ -12,7 +13,8 @@ import { formatBRL, formatPercentBps, sum } from "@/lib/money";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { COMMERCIAL_MODELS, PAYABLE_CATEGORIES, PAYMENT_METHODS, PRODUCT_TYPES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 import { displayStatus } from "@/lib/finance";
-import { maskDocument, maskPassport, formatDocument, cn } from "@/lib/utils";
+import { maskDocument, maskPassport, cn } from "@/lib/utils";
+import { clientDocHint, hasClientDocument, missingDocLabel } from "@/lib/client-identity";
 import type { Params } from "@/lib/params";
 import { SaleHeaderActions } from "../sale-actions";
 import { ReservationEditor } from "./reservation-editor";
@@ -30,17 +32,49 @@ const ACTION_LABEL: Record<string, string> = {
   "venda.alterada": "Venda alterada",
   "venda.cancelada": "Venda cancelada",
   "venda.ajuste_registrado": "Reembolso/multa registrado",
+  "venda.fornecedor_pago_cartao": "Fornecedor pago com o cartão da agência",
+  "venda.fornecedor_cartao_estornado": "Compra no cartão da agência estornada",
+  "venda.fornecedor_cartao_pendente": "Compra no cartão não lançada (fatura já paga)",
   "viagem.venda_vinculada": "Vinculada a uma viagem",
   "viagem.venda_desvinculada": "Desvinculada da viagem",
   "orcamento.recebido_api": "Orçamento recebido por integração",
 };
+
+/** "Fornecedor: ..." de cada produto, em palavras simples. */
+function supplierPaymentText(i: {
+  supplierPayment: string;
+  supplierPayMethod: string | null;
+  supplierCardInstallments: number;
+  supplierCardStartInstallment: number;
+  supplierCardAccount: { name: string } | null;
+}) {
+  switch (i.supplierPayment) {
+    case "CLIENTE_DIRETO":
+      return "pago pelo cliente direto";
+    case "CARTAO_AGENCIA": {
+      const start = i.supplierCardStartInstallment > 1 ? ` (a partir da ${i.supplierCardStartInstallment}ª)` : "";
+      const parts = i.supplierCardInstallments > 1 ? ` · ${i.supplierCardInstallments}x${start}` : "";
+      return `pago no cartão ${i.supplierCardAccount?.name ?? "da agência (cartão não escolhido)"}${parts}`;
+    }
+    case "A_VISTA":
+      return `pago à vista${i.supplierPayMethod ? ` · ${PAYMENT_METHODS.label(i.supplierPayMethod)}` : ""}`;
+    default:
+      return "faturado (a agência paga no vencimento)";
+  }
+}
 
 export default async function SalePage({ params }: { params: Params }) {
   const ctx = await requirePageContext();
   const { id } = await params;
   const [s, history, suppliers] = await orNotFound(Promise.all([getSale(ctx, id), getSaleAudit(ctx, id), can(ctx, "finance.manage") ? supplierOptions(ctx) : Promise.resolve([])]));
   const t = today(ctx);
-  const contract = s.contracts[0];
+  // contrato que vale para a venda: o próprio ou o contrato da viagem
+  const contract = effectiveContract(s);
+  const tripContract = contract?.tripId && s.trip ? s.trip : null;
+  const otherTripSales = s.trip ? s.trip.sales.filter((x) => x.id !== s.id) : [];
+  // incluída no contrato da viagem depois da emissão: entra no texto quando a prévia for atualizada
+  const tripPending = !!tripContract && !(JSON.parse(contract!.saleIdsJson) as string[]).includes(s.id);
+  const tripCompanions = tripContract ? otherTripSales.filter((x) => x.contracts.every((c) => c.id === contract!.id)).map((x) => x.code) : [];
   const salesRec = s.receivables.filter((r) => r.origin === "VENDA");
   const otherRec = s.receivables.filter((r) => r.origin !== "VENDA");
   const confirmed = s.status === "CONFIRMADA" || s.status === "CONCLUIDA";
@@ -54,7 +88,7 @@ export default async function SalePage({ params }: { params: Params }) {
     !s.destination && "destino",
     !s.tripStart && "data da viagem",
     !s.locator && !s.items.some((i) => i.locator) && "localizador",
-    !s.client.document && "CPF/CNPJ do cliente",
+    !hasClientDocument(s.client) && `${missingDocLabel(s.client)} do cliente`,
     paxNamed < s.passengerCount && `${s.passengerCount - paxNamed} passageiro(s) sem nome`,
   ].filter(Boolean) as string[];
   const ravDu = sum(s.items.map((i) => i.ravCents + i.duCents));
@@ -65,7 +99,7 @@ export default async function SalePage({ params }: { params: Params }) {
     { label: "Orçamento", done: true, detail: s.origin === "API" ? "via integração" : "registrado" },
     { label: "Venda", done: confirmed, detail: confirmed ? "confirmada" : s.status === "CANCELADA" ? "cancelada" : "rascunho" },
     { label: "Financeiro", done: confirmed && toReceive > 0 && received >= toReceive, detail: confirmed ? (toReceive ? `${formatBRL(received)} de ${formatBRL(toReceive)}` : "sem cobrança") : "após confirmar" },
-    { label: "Contrato", done: contract?.status === "ASSINADO", detail: contract ? (contract.status === "ASSINADO" ? "assinado" : contract.status === "AGUARDANDO_ENVIO" ? "emitido" : contract.status === "EM_PREPARACAO" ? "em preparação" : contract.status === "NAO_GERADO" ? "sem modelo" : contract.status.toLowerCase()) : "após confirmar" },
+    { label: "Contrato", done: contract?.status === "ASSINADO", detail: tripPending ? "falta incluir" : contract ? (contract.status === "ASSINADO" ? "assinado" : contract.status === "AGUARDANDO_ENVIO" ? "emitido" : contract.status === "EM_PREPARACAO" ? "em preparação" : contract.status === "NAO_GERADO" ? "sem modelo" : contract.status.toLowerCase()) : "após confirmar" },
     { label: "Pré-viagem", done: !!s.tripStart && s.tripStart <= t, detail: s.tripStart ? (missing.length ? `${missing.length} pendência(s)` : `embarque ${formatDate(s.tripStart)}`) : "sem data" },
     { label: "Pós-venda", done: !!s.tripEnd && s.tripEnd < t, detail: s.tripEnd ? (s.tripEnd < t ? "viagem concluída" : `retorno ${formatDate(s.tripEnd)}`) : "—" },
   ];
@@ -120,7 +154,7 @@ export default async function SalePage({ params }: { params: Params }) {
               <NewCreditButton variant="outline" label="Gerar crédito ao cliente" fixedClient={{ id: s.client.id, name: s.client.name }} originSaleId={s.id} defaultAmount={sum(salesRec.map((r) => r.settledCents))} />
             )}
             {editLocked && s.permissions.canEdit && s.status !== "CANCELADA" && <RequestEditButton saleId={s.id} />}
-            <SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit && !editLocked} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} />
+            <SaleHeaderActions id={s.id} code={s.code} status={s.status} canEdit={s.permissions.canEdit && !editLocked} canCancel={s.permissions.canCancel} canCreate={can(ctx, "sales.create")} hasAgencyCard={s.items.some((i) => i.cardBills !== null)} />
           </>
         }
       />
@@ -210,7 +244,20 @@ export default async function SalePage({ params }: { params: Params }) {
                     <Td className="min-w-48">
                       <p className="font-medium text-ink">{PRODUCT_TYPES.label(i.productType)}</p>
                       {i.description && <p className="text-xs text-muted">{i.description}</p>}
-                      <p className="mt-0.5 text-[11px] text-subtle">{COMMERCIAL_MODELS.label(i.commercialModel)}</p>
+                      <p className="mt-0.5 text-[11px] text-subtle">Fornecedor: {supplierPaymentText(i)}</p>
+                      {i.commercialModel !== "COMISSAO" && <p className="text-[11px] text-subtle">Receita: {COMMERCIAL_MODELS.label(i.commercialModel)}</p>}
+                      {i.supplierPayment === "CARTAO_AGENCIA" && s.status === "CANCELADA" &&
+                        (i.cardBills && i.cardBills.length > 0 ? (
+                          <p className="mt-0.5 text-[11px] text-amber-700">Venda cancelada, mas a compra continua no cartão. Na fatura: {i.cardBills.join(", ")}</p>
+                        ) : i.cardReversedOnCancel ? (
+                          <p className="mt-0.5 text-[11px] text-muted">Compra tirada do cartão no cancelamento da venda.</p>
+                        ) : null)}
+                      {i.supplierPayment === "CARTAO_AGENCIA" && confirmed && s.status !== "CANCELADA" &&
+                        (i.cardBills ? (
+                          i.cardBills.length > 0 && <p className="text-[11px] text-muted">Na fatura: {i.cardBills.join(", ")}</p>
+                        ) : (
+                          <p className="mt-0.5 text-[11px] text-amber-700">Ainda não lançado no cartão: o financeiro registra o pagamento com o cartão.</p>
+                        ))}
                     </Td>
                     <Td className="min-w-40">
                       {i.supplier ? (
@@ -366,7 +413,7 @@ export default async function SalePage({ params }: { params: Params }) {
             <CardHeader title="Cliente" icon={UserRound} action={<Link href={`/clientes/${s.client.id}`} className="text-xs font-medium text-brand-600 hover:underline">Ver cadastro</Link>} />
             <div className="space-y-1 p-5 text-sm">
               <p className="font-semibold text-ink">{s.client.name}</p>
-              <p className="text-muted">{s.client.document ? formatDocument(s.client.document) : "CPF/CNPJ não informado"}</p>
+              <p className="text-muted">{clientDocHint(s.client) ?? "Documento não informado"}</p>
               <p className="text-muted">{s.client.whatsapp ?? s.client.phone ?? "—"}</p>
               {s.client.email && <p className="text-muted">{s.client.email}</p>}
             </div>
@@ -421,10 +468,32 @@ export default async function SalePage({ params }: { params: Params }) {
                     <ContractStatusBadge s={contract.status} />
                     {contract.version > 0 && <span className="text-xs text-muted">versão {contract.version}</span>}
                   </div>
-                  {contract.outdated && <p className="text-xs text-amber-700">A venda foi alterada após a emissão. Confira o contrato.</p>}
+                  {tripContract && tripPending && (
+                    <p className="text-slate-700">
+                      Esta venda vai entrar no contrato da viagem{" "}
+                      <Link href={`/viagens/${tripContract.id}`} className="font-medium text-brand-700 hover:underline">
+                        {tripContract.code}
+                      </Link>{" "}
+                      quando a prévia for atualizada: o texto emitido ainda não a inclui.
+                    </p>
+                  )}
+                  {tripContract && !tripPending && (
+                    <p className="text-slate-700">
+                      Esta venda faz parte do contrato da viagem{" "}
+                      <Link href={`/viagens/${tripContract.id}`} className="font-medium text-brand-700 hover:underline">
+                        {tripContract.code}
+                      </Link>
+                      {tripCompanions.length > 0 ? `, junto com ${tripCompanions.join(", ")}.` : "."}
+                    </p>
+                  )}
+                  {contract.outdated && (
+                    <p className="text-xs text-amber-700">
+                      {tripContract ? "Uma venda da viagem foi alterada, incluída ou retirada depois da emissão. Confira o contrato." : "A venda foi alterada após a emissão. Confira o contrato."}
+                    </p>
+                  )}
                   {can(ctx, "contracts.manage") && (
                     <LinkButton href={`/contratos/${contract.id}`} variant="secondary" className="w-full">
-                      <FileSignature className="h-4 w-4" /> Abrir contrato
+                      <FileSignature className="h-4 w-4" /> {tripContract ? "Abrir contrato da viagem" : "Abrir contrato"}
                     </LinkButton>
                   )}
                 </>
@@ -432,6 +501,14 @@ export default async function SalePage({ params }: { params: Params }) {
                 can(ctx, "contracts.manage") ? <PrepareContractButton saleId={s.id} /> : <p className="text-muted">Contrato não gerado.</p>
               ) : (
                 <p className="text-muted">Gerado após a confirmação da venda.</p>
+              )}
+              {confirmed && s.trip && !s.trip.contracts[0] && otherTripSales.length > 0 && (!s.contracts[0] || contractNeverSent(s.contracts[0])) && can(ctx, "contracts.manage") && (
+                <div className="rounded-lg bg-brand-25 p-3 text-xs text-slate-700">
+                  Esta venda está na viagem {s.trip.code} com outras vendas. Você pode juntar todas em um contrato só.{" "}
+                  <Link href={`/viagens/${s.trip.id}`} className="font-medium text-brand-700 hover:underline">
+                    Ir para a viagem
+                  </Link>
+                </div>
               )}
             </div>
           </Card>

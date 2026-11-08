@@ -8,36 +8,72 @@ import { prisma, type Tx } from "../db";
 import { assertCan, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
-import { splitInstallments } from "@/lib/money";
+import { billMonthOf, cardBillSchedule, cardPlan, BILL_MONTH_RE } from "@/lib/card-bills";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { entryStatus } from "@/lib/finance";
 
 export const CARD_BILL_CATEGORY = "FATURA_CARTAO";
-const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+export { cardBillSchedule };
 
-function ym(y: number, m0: number) {
-  const d = new Date(Date.UTC(y, m0, 1));
-  return { y: d.getUTCFullYear(), m0: d.getUTCMonth() };
+type CardAccount = { id: string; name: string; closingDay: number | null; dueDay: number | null };
+/** Opções da compra no cartão: fatura da 1ª parcela lançada e, para compra antiga, a parcela em que ela está. */
+export type CardChargeOpts = { firstMonth?: string | null; startInstallment?: number | null };
+
+/** Parcelas da compra e a fatura de cada uma (valida as opções). */
+export function planCardCharge(account: CardAccount, s: { date: string; amountCents: number; cardInstallments: number }, opts: CardChargeOpts = {}) {
+  if (!account.closingDay || !account.dueDay) throw new AppError(`Informe o dia de fechamento e o dia de vencimento do cartão "${account.name}" em Contas e saldos.`);
+  const installments = Math.min(Math.max(s.cardInstallments || 1, 1), 24);
+  const startInstallment = opts.startInstallment ?? 1;
+  if (!Number.isInteger(startInstallment) || startInstallment < 1 || startInstallment > installments)
+    throw new AppError("A parcela inicial não pode ser maior que o número de parcelas.");
+  if (opts.firstMonth && !BILL_MONTH_RE.test(opts.firstMonth)) throw new AppError("Fatura inválida: escolha o mês da fatura.");
+  const firstMonth = opts.firstMonth || billMonthOf(s.date, account.closingDay);
+  return cardPlan({ amountCents: s.amountCents, installments, startInstallment, firstMonth, closingDay: account.closingDay, dueDay: account.dueDay });
 }
-function dayIn(y: number, m0: number, day: number) {
-  const last = new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
-  return `${y}-${String(m0 + 1).padStart(2, "0")}-${String(Math.min(day, last)).padStart(2, "0")}`;
-}
+
+/** Fatura em que caiu uma parcela da compra; `line` é a linha gravada nas notas da fatura (lista "Compras nesta fatura"). */
+type CardBillRef = { payableId: string; cents: number; line?: string };
+
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * Em qual fatura cai cada parcela de uma compra feita em `date`.
- * Compra depois do dia de fechamento vai para a fatura do mês seguinte. Se o vencimento é
- * menor ou igual ao fechamento, a fatura vence no mês seguinte ao fechamento.
+ * Tira das notas da fatura a linha desta compra (a lista de compras e a contagem vêm dessas linhas).
+ * Baixas antigas não guardavam a linha: aí procura pela data, descrição e valor da parcela.
  */
-export function cardBillSchedule(date: string, closingDay: number, dueDay: number, installments: number) {
-  const [y, m, d] = date.split("-").map(Number);
-  const first = ym(y, m - 1 + (d > closingDay ? 1 : 0));
-  return Array.from({ length: installments }, (_, i) => {
-    const close = ym(first.y, first.m0 + i);
-    const due = ym(close.y, close.m0 + (dueDay <= closingDay ? 1 : 0));
-    return { month: `${close.y}-${String(close.m0 + 1).padStart(2, "0")}`, label: `${MONTHS[close.m0]}/${close.y}`, closingDate: dayIn(close.y, close.m0, closingDay), dueDate: dayIn(due.y, due.m0, dueDay) };
-  });
+export function removePurchaseLine(notes: string | null, ref: { line?: string; cents: number }, fallback?: { date: string; description: string }) {
+  const lines = (notes ?? "").split("\n");
+  let idx = ref.line ? lines.lastIndexOf(ref.line) : -1;
+  if (idx < 0 && fallback) {
+    const head = `${formatDate(fallback.date)} · ${fallback.description} · ${formatBRL(ref.cents)}`;
+    const re = new RegExp(`^${escapeRe(head)}( \\(\\d+/\\d+\\))?$`);
+    for (let i = lines.length - 1; i >= 0; i--)
+      if (re.test(lines[i])) {
+        idx = i;
+        break;
+      }
+  }
+  if (idx < 0) return notes;
+  lines.splice(idx, 1);
+  return lines.filter(Boolean).join("\n") || null;
+}
+
+const isPaidBill = (b: { status: string; amountCents: number; settledCents: number }) => b.status === "PAGO" || (b.amountCents > 0 && b.settledCents >= b.amountCents);
+
+/**
+ * Primeira fatura já paga em que a compra cairia (ou null). A baixa feita pela tela recusa;
+ * a baixa automática (venda) usa esta checagem antes, para deixar a conta em aberto em vez de falhar.
+ */
+export async function findPaidCardBill(tx: Tx, companyId: string, account: CardAccount, plan: { month: string; label: string }[]) {
+  for (const b of plan) {
+    const bill = await tx.payable.findUnique({ where: { companyId_sourceKey: { companyId, sourceKey: `cartao:${account.id}:${b.month}` } } });
+    if (bill && bill.status !== "CANCELADO" && isPaidBill(bill)) return { month: b.month, label: b.label, payableId: bill.id };
+  }
+  return null;
+}
+
+export function paidBillMessage(label: string, cardName: string) {
+  return `A fatura de ${label} do cartão "${cardName}" já está paga. Escolha a fatura seguinte ou estorne o pagamento dessa fatura primeiro.`;
 }
 
 async function ensureCardCategory(tx: Tx, companyId: string) {
@@ -58,21 +94,22 @@ async function refreshBill(tx: Tx, id: string) {
 export async function applyCardCharge(
   tx: Tx,
   ctx: Ctx,
-  account: { id: string; name: string; closingDay: number | null; dueDay: number | null },
+  account: CardAccount,
   s: { id: string; date: string; amountCents: number; cardInstallments: number },
   description: string,
+  opts: CardChargeOpts = {},
 ) {
-  if (!account.closingDay || !account.dueDay) throw new AppError(`Informe o dia de fechamento e o dia de vencimento do cartão "${account.name}" em Contas e saldos.`);
+  const plan = planCardCharge(account, s, opts);
+  const paid = await findPaidCardBill(tx, ctx.companyId, account, plan);
+  if (paid) throw new AppError(paidBillMessage(paid.label, account.name));
   await ensureCardCategory(tx, ctx.companyId);
-  const parts = splitInstallments(s.amountCents, s.cardInstallments);
-  const schedule = cardBillSchedule(s.date, account.closingDay, account.dueDay, s.cardInstallments);
-  const bills: { payableId: string; cents: number }[] = [];
-  for (const [i, b] of schedule.entries()) {
+  const bills: CardBillRef[] = [];
+  for (const b of plan) {
     const sourceKey = `cartao:${account.id}:${b.month}`;
-    const line = `${formatDate(s.date)} · ${description} · ${formatBRL(parts[i])}${s.cardInstallments > 1 ? ` (${i + 1}/${s.cardInstallments})` : ""}`;
+    const line = `${formatDate(s.date)} · ${description} · ${formatBRL(b.cents)}${b.of > 1 ? ` (${b.n}/${b.of})` : ""}`;
     const existing = await tx.payable.findUnique({ where: { companyId_sourceKey: { companyId: ctx.companyId, sourceKey } } });
     const bill = existing
-      ? await tx.payable.update({ where: { id: existing.id }, data: { amountCents: { increment: parts[i] }, notes: [existing.notes, line].filter(Boolean).join("\n").slice(-4000), dueDate: b.dueDate } })
+      ? await tx.payable.update({ where: { id: existing.id }, data: { amountCents: { increment: b.cents }, notes: [existing.notes, line].filter(Boolean).join("\n").slice(-4000), dueDate: b.dueDate } })
       : await tx.payable.create({
           data: {
             companyId: ctx.companyId,
@@ -80,7 +117,7 @@ export async function applyCardCharge(
             origin: "CARTAO",
             description: `Fatura ${account.name} · ${b.label}`,
             category: CARD_BILL_CATEGORY,
-            amountCents: parts[i],
+            amountCents: b.cents,
             dueDate: b.dueDate,
             method: "BOLETO",
             status: "PENDENTE",
@@ -88,25 +125,88 @@ export async function applyCardCharge(
           },
         });
     await refreshBill(tx, bill.id);
-    bills.push({ payableId: bill.id, cents: parts[i] });
+    bills.push({ payableId: bill.id, cents: b.cents, line });
   }
-  await tx.settlement.update({ where: { id: s.id }, data: { cardBillsJson: JSON.stringify(bills) } });
-  await audit(tx, ctx, "cartao.compra", "Settlement", s.id, { accountId: account.id, amountCents: s.amountCents, parcelas: s.cardInstallments });
+  const startInstallment = plan[0]?.n ?? 1;
+  await tx.settlement.update({
+    where: { id: s.id },
+    data: { cardBillsJson: JSON.stringify(bills), cardStartInstallment: startInstallment, cardFirstBillMonth: opts.firstMonth || null },
+  });
+  await audit(tx, ctx, "cartao.compra", "Settlement", s.id, {
+    accountId: account.id,
+    amountCents: s.amountCents,
+    parcelas: s.cardInstallments,
+    parcelaInicial: startInstallment,
+    primeiraFatura: plan[0]?.month,
+    lancadoNasFaturasCents: bills.reduce((t, b) => t + b.cents, 0),
+  });
+  return { bills, plan };
+}
+
+/** Em quais faturas do cartão caiu cada baixa (para mostrar no histórico da conta). */
+export async function getCardBillsFor(db: Tx, companyId: string, settlements: { id: string; cardBillsJson: string | null }[]) {
+  const parsed = settlements.map((s) => ({ id: s.id, bills: s.cardBillsJson ? (JSON.parse(s.cardBillsJson) as { payableId: string; cents: number }[]) : [] }));
+  const ids = [...new Set(parsed.flatMap((p) => p.bills.map((b) => b.payableId)))];
+  const rows = ids.length
+    ? await db.payable.findMany({ where: { companyId, id: { in: ids } }, select: { id: true, description: true, dueDate: true, status: true } })
+    : [];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out: Record<string, { payableId: string; description: string; dueDate: string; status: string; cents: number }[]> = {};
+  for (const p of parsed) {
+    if (!p.bills.length) continue;
+    out[p.id] = p.bills.map((b) => {
+      const r = byId.get(b.payableId);
+      return { payableId: b.payableId, description: r?.description ?? "Fatura do cartão", dueDate: r?.dueDate ?? "", status: r?.status ?? "CANCELADO", cents: b.cents };
+    });
+  }
+  return out;
+}
+
+/** Fatura já paga que impede estornar esta compra no cartão (ou null). Não altera nada. */
+export async function paidBillBlockingReversal(tx: Tx, s: { cardBillsJson: string | null }) {
+  if (!s.cardBillsJson) return null;
+  const bills = JSON.parse(s.cardBillsJson) as { payableId: string; cents: number }[];
+  for (const b of bills) {
+    const p = await tx.payable.findUnique({ where: { id: b.payableId } });
+    if (p && p.settledCents > p.amountCents - b.cents) return p.description;
+  }
+  return null;
 }
 
 /** Estorno de um pagamento feito com o cartão: tira o valor das faturas (que não podem estar pagas além do novo total). */
-export async function reverseCardCharge(tx: Tx, s: { cardBillsJson: string | null }) {
+export async function reverseCardCharge(tx: Tx, s: { id?: string; cardBillsJson: string | null }) {
   if (!s.cardBillsJson) return;
-  const bills = JSON.parse(s.cardBillsJson) as { payableId: string; cents: number }[];
+  const bills = JSON.parse(s.cardBillsJson) as CardBillRef[];
+  // Para baixas antigas (sem a linha guardada): data e descrição usadas na linha da fatura
+  let fallback: { date: string; description: string } | undefined;
+  if (s.id && bills.some((b) => !b.line)) {
+    const row = await tx.settlement.findUnique({ where: { id: s.id }, select: { date: true, payable: { select: { description: true } }, receivable: { select: { description: true } } } });
+    const description = row?.payable?.description ?? row?.receivable?.description;
+    if (row && description) fallback = { date: row.date, description: description.slice(0, 120) };
+  }
   for (const b of bills) {
     const p = await tx.payable.findUnique({ where: { id: b.payableId } });
     if (!p) continue;
     if (p.settledCents > p.amountCents - b.cents)
       throw new AppError(`A fatura "${p.description}" já foi paga. Estorne o pagamento da fatura antes de estornar esta compra no cartão.`);
-    await tx.payable.update({ where: { id: p.id }, data: { amountCents: { decrement: b.cents } } });
+    await tx.payable.update({ where: { id: p.id }, data: { amountCents: { decrement: b.cents }, notes: removePurchaseLine(p.notes, b, fallback) } });
     await refreshBill(tx, p.id);
   }
 }
+
+/**
+ * Cartões ativos da agência para escolher na venda ("como o fornecedor é pago"). Não exige acesso
+ * ao financeiro: só nome e dias de fechamento/vencimento, sem saldos nem faturas.
+ */
+export async function cardOptions(ctx: Ctx) {
+  const cards = await prisma.financialAccount.findMany({
+    where: { companyId: ctx.companyId, type: "CARTAO_CREDITO", active: true },
+    select: { id: true, name: true, closingDay: true, dueDay: true },
+    orderBy: { name: "asc" },
+  });
+  return cards.map((c) => ({ ...c, ready: !!c.closingDay && !!c.dueDay }));
+}
+export type AgencyCardOption = Awaited<ReturnType<typeof cardOptions>>[number];
 
 /** Cartões da agência com as faturas em aberto e as próximas. */
 export async function listCards(ctx: Ctx) {

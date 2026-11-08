@@ -29,7 +29,7 @@
  */
 
 import { applyBps, ratioBps, sum } from "./money";
-import type { CommercialModel } from "./constants";
+import type { CommercialModel, SupplierPayment } from "./constants";
 
 export type SaleItemInput = {
   commercialModel: CommercialModel;
@@ -175,4 +175,48 @@ export function displayStatus(status: string, dueDate: string, today: string): s
  */
 export function settlementPrincipal(amountCents: number, interestCents: number, discountCents: number): number {
   return amountCents - interestCents + discountCents;
+}
+
+/** Campos de "como o fornecedor é pago" de um produto da venda. */
+export type SupplierPaymentFields = {
+  commercialModel: CommercialModel;
+  supplierPayment?: SupplierPayment | null;
+  supplierPayMethod?: string | null;
+  supplierCardAccountId?: string | null;
+  supplierCardInstallments?: number | null;
+  supplierCardStartInstallment?: number | null;
+  supplierCardFirstBillMonth?: string | null;
+};
+
+/**
+ * Deixa coerentes o modelo comercial e a forma de pagar o fornecedor (determinístico):
+ * - sem forma informada, ela sai do modelo comercial (Comissão → cliente paga direto; senão, faturado),
+ *   o que mantém a API, o Frédy e a leitura por IA funcionando como antes;
+ * - "cliente paga direto" é sempre o modelo Comissão, e o modelo Comissão é sempre "cliente paga direto"
+ *   (o modelo comercial manda, para não mudar as contas de quem só manda o modelo);
+ * - os campos de outra forma de pagamento são zerados.
+ */
+export function normalizeSupplierPayment<T extends SupplierPaymentFields>(i: T) {
+  let pay: SupplierPayment = i.supplierPayment ?? (i.commercialModel === "COMISSAO" ? "CLIENTE_DIRETO" : "FATURADO");
+  if (i.commercialModel === "COMISSAO") pay = "CLIENTE_DIRETO";
+  const commercialModel: CommercialModel = pay === "CLIENTE_DIRETO" ? "COMISSAO" : i.commercialModel;
+  const card = pay === "CARTAO_AGENCIA";
+  return {
+    ...i,
+    commercialModel,
+    supplierPayment: pay,
+    supplierPayMethod: pay === "A_VISTA" ? i.supplierPayMethod || null : null,
+    supplierCardAccountId: card ? i.supplierCardAccountId || null : null,
+    supplierCardInstallments: card ? Math.min(Math.max(i.supplierCardInstallments || 1, 1), 24) : 1,
+    supplierCardStartInstallment: card ? Math.max(i.supplierCardStartInstallment || 1, 1) : 1,
+    supplierCardFirstBillMonth: card ? i.supplierCardFirstBillMonth || null : null,
+  };
+}
+
+/** Forma prevista da conta a pagar ao fornecedor, conforme o jeito de pagar. */
+export function supplierPayableMethod(i: { supplierPayment: string; supplierPayMethod?: string | null }): string | null {
+  if (i.supplierPayment === "FATURADO") return "BOLETO";
+  if (i.supplierPayment === "A_VISTA") return i.supplierPayMethod ?? null;
+  if (i.supplierPayment === "CARTAO_AGENCIA") return "CARTAO_CREDITO";
+  return null;
 }

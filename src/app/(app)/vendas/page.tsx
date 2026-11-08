@@ -177,6 +177,12 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
                   </Td>
                   <Td>
                     <ContractStatusBadge s={s.contractStatus} />
+                    {s.inTripContract &&
+                      (s.tripContractPending ? (
+                        <p className="mt-0.5 text-xs text-amber-700">Entra no contrato da viagem ao atualizar a prévia</p>
+                      ) : (
+                        <p className="mt-0.5 text-xs text-muted">No contrato da viagem</p>
+                      ))}
                   </Td>
                   <Td align="right">
                     <SaleRowActions id={s.id} code={s.code} status={s.status} canCancel={can(ctx, "sales.cancel") || s.status === "ORCAMENTO"} canCreate={can(ctx, "sales.create")} />

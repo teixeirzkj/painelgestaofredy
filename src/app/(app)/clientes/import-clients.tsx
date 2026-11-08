@@ -65,8 +65,8 @@ function CsvImport() {
         <li>
           Baixe o modelo, ou exporte a planilha do sistema antigo (no Excel: <strong>Salvar como → CSV</strong>).
         </li>
-        <li>A primeira linha precisa ter os nomes das colunas. Só a coluna <strong>nome</strong> é obrigatória.</li>
-        <li>Cliente que já existe (mesmo CPF/CNPJ ou e-mail) não é duplicado: só os campos vazios são completados.</li>
+        <li>A primeira linha precisa ter os nomes das colunas. Só a coluna <strong>nome</strong> é obrigatória. Para estrangeiro, use as colunas <strong>nacionalidade</strong>, <strong>rne</strong> e <strong>passaporte</strong> (o CPF pode ficar vazio).</li>
+        <li>Cliente que já existe (mesmo CPF/CNPJ, passaporte ou e-mail) não é duplicado: só os campos vazios são completados.</li>
       </ol>
       <div className="flex flex-wrap gap-2">
         <a href={templateHref} download="modelo-clientes.csv" className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-white px-3 font-medium shadow-sm hover:bg-slate-50">
@@ -152,7 +152,7 @@ function MondeImport({ monde }: { monde: MondeState }) {
         }}
       >
         <p className="text-slate-700">
-          Traz o cadastro dos clientes do Monde pela API oficial: nome, CPF/CNPJ, RG, nascimento, contatos, endereço e passaporte. A API do Monde <strong>não entrega as vendas nem as imagens</strong> dos documentos; as vendas antigas entram por planilha e as fotos dos documentos podem ser anexadas no cadastro de cada cliente.
+          Traz o cadastro dos clientes do Monde pela API oficial: nome, CPF/CNPJ, RG, nascimento, sexo, contatos, endereço e passaporte. Nacionalidade e RNE não vêm do Monde (a API não tem esses campos): marque o cliente estrangeiro no cadastro. A API do Monde <strong>não entrega as vendas nem as imagens</strong> dos documentos; as vendas antigas entram por planilha e as fotos dos documentos podem ser anexadas no cadastro de cada cliente.
         </p>
         <Field label="Usuário do Monde" required hint="Formato: usuario@suaagencia.monde.com.br. O usuário precisa ter acesso total no Monde.">
           <Input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="admin@suaagencia.monde.com.br" autoComplete="off" />
@@ -195,7 +195,7 @@ function MondeImport({ monde }: { monde: MondeState }) {
         </Button>
         {running && <Loader2 className="h-4 w-4 animate-spin self-center text-muted" />}
       </div>
-      <p className="text-xs text-muted">Cliente que já existe (mesmo id do Monde, CPF/CNPJ ou e-mail) não é duplicado: só os campos vazios são completados. Usuários do Monde (agentes) não entram como clientes.</p>
+      <p className="text-xs text-muted">Cliente que já existe (mesmo id do Monde, CPF/CNPJ, passaporte ou e-mail) não é duplicado: só os campos vazios são completados. Usuários do Monde (agentes) não entram como clientes.</p>
     </div>
   );
 }

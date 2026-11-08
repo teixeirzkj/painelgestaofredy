@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
 import { requirePageContext } from "@/server/auth";
-import { getContract } from "@/server/services/contracts";
+import { can } from "@/server/context";
+import { contractNeverSent, getContract } from "@/server/services/contracts";
 import { Card, CardHeader, Notice, PageHeader } from "@/components/ui";
 import { ContractStatusBadge } from "@/components/status";
 import { formatDateTime } from "@/lib/dates";
@@ -17,6 +18,9 @@ export default async function ContractPage({ params }: { params: Params }) {
   const { id } = await params;
   const c = await orNotFound(getContract(ctx, id));
   const missing = JSON.parse(c.missingFieldsJson) as string[];
+  const isTrip = !!c.tripId && !!c.trip;
+  // contrato ainda não enviado: "Atualizar prévia" refaz o texto e libera a nova emissão
+  const canRefreshOutdated = c.status === "AGUARDANDO_ENVIO" || c.status === "EM_PREPARACAO" || c.status === "NAO_GERADO";
   return (
     <>
       <div className="no-print">
@@ -24,12 +28,24 @@ export default async function ContractPage({ params }: { params: Params }) {
           back={{ href: "/contratos", label: "Contratos" }}
           title={
             <span className="flex items-center gap-2">
-              Contrato {c.sale.code} <ContractStatusBadge s={c.status} />
+              {isTrip ? `Contrato da viagem ${c.trip!.code}` : `Contrato ${c.sale.code}`} <ContractStatusBadge s={c.status} />
             </span>
           }
           description={
             <>
-              {c.sale.client.name} · <Link href={`/vendas/${c.saleId}`} className="text-brand-600 hover:underline">ver venda</Link>
+              {c.sale.client.name} ·{" "}
+              {isTrip ? (
+                <>
+                  <Link href={`/viagens/${c.tripId}`} className="text-brand-600 hover:underline">
+                    ver viagem
+                  </Link>
+                  {c.tripSales.included.length > 0 && <> · vendas: {c.tripSales.included.map((s) => s.code).join(", ")}</>}
+                </>
+              ) : (
+                <Link href={`/vendas/${c.saleId}`} className="text-brand-600 hover:underline">
+                  ver venda
+                </Link>
+              )}
               {c.template && ` · modelo “${c.template.name}” v${c.templateVersion}`}
               {c.issuedAt && ` · versão ${c.version} emitida em ${formatDateTime(c.issuedAt, ctx.timezone)}`}
             </>
@@ -39,6 +55,7 @@ export default async function ContractPage({ params }: { params: Params }) {
               id={c.id}
               status={c.status}
               canIssue={missing.length === 0}
+              canSplit={isTrip && contractNeverSent(c) && (can(ctx, "sales.view_all") || c.tripSales.included.every((s) => s.sellerId === ctx.userId))}
               signature={{ enabled: zapsignConfigured(), provider: c.signatureProvider, signUrl: c.signUrl, cost: formatBRL(signatureCostCents()), clientEmail: c.sale.client.email, clientPhone: c.sale.client.whatsapp || c.sale.client.phone }}
             />
           }
@@ -59,9 +76,23 @@ export default async function ContractPage({ params }: { params: Params }) {
               )}
             </Notice>
           )}
-          {c.outdated && (
-            <Notice tone="amber" title="A venda foi alterada depois da emissão">
-              O conteúdo emitido foi preservado. Se necessário, cancele e reabra o contrato para emitir uma nova versão.
+          {c.outdated &&
+            (isTrip ? (
+              <Notice tone="amber" title="Uma venda da viagem foi alterada, incluída ou retirada depois da emissão">
+                {canRefreshOutdated
+                  ? "Clique em “Atualizar prévia” e emita o contrato de novo. Até lá, vale o texto emitido."
+                  : "O texto emitido foi guardado. Se precisar, cancele e reabra o contrato para emitir uma versão nova."}
+              </Notice>
+            ) : (
+              <Notice tone="amber" title="A venda foi alterada depois da emissão">
+                {canRefreshOutdated
+                  ? "Clique em “Atualizar prévia” e emita o contrato de novo. Até lá, vale o texto emitido."
+                  : "O conteúdo emitido foi preservado. Se necessário, cancele e reabra o contrato para emitir uma nova versão."}
+              </Notice>
+            ))}
+          {isTrip && c.tripSales.outside.length > 0 && (
+            <Notice title="Contrato da viagem">
+              Ficaram de fora porque já tinham contrato enviado ao cliente: {c.tripSales.outside.map((s) => s.code).join(", ")}.
             </Notice>
           )}
           {c.status === "ENVIADO" && (
@@ -71,7 +102,7 @@ export default async function ContractPage({ params }: { params: Params }) {
           )}
           {c.status === "ASSINADO" && (
             <Notice title="Contrato assinado">
-              Assinado{c.signedAt ? ` em ${formatDateTime(c.signedAt, ctx.timezone)}` : ""}. O PDF assinado fica nos anexos da venda.
+              Assinado{c.signedAt ? ` em ${formatDateTime(c.signedAt, ctx.timezone)}` : ""}. {isTrip ? "O PDF assinado fica nos documentos da viagem." : "O PDF assinado fica nos anexos da venda."}
             </Notice>
           )}
           {c.status === "AGUARDANDO_ENVIO" && (

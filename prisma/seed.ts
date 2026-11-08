@@ -434,7 +434,7 @@ async function seedTemplates(companyId: string) {
 [MODELO DE DEMONSTRAÇÃO — submeta à revisão jurídica da agência antes do uso]
 
 CONTRATADA: {{agencia.nome}}, CNPJ {{agencia.documento}}.
-CONTRATANTE: {{cliente.nome}}, CPF/CNPJ {{cliente.documento}}, residente em {{cliente.endereco}}, telefone {{cliente.telefone}}, e-mail {{cliente.email}}.
+CONTRATANTE: {{cliente.nome}}, {{cliente.identificacao}}, residente em {{cliente.endereco}}, telefone {{cliente.telefone}}, e-mail {{cliente.email}}.
 
 1. OBJETO
 A CONTRATADA intermedeia, em nome do CONTRATANTE, a aquisição dos serviços turísticos abaixo, referentes à venda {{venda.codigo}} de {{venda.data}}:

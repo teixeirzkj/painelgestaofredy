@@ -3,15 +3,18 @@ import { assertCan, can, today, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
 import { saleInputSchema, refundSchema, type SaleParsed } from "./schemas";
-import { calculateSale, entryStatus, supplierRemittance, validateSaleFinancials, type SellerCommissionRule } from "@/lib/finance";
-import { REFUND_KINDS, type CommercialModel } from "@/lib/constants";
+import { calculateSale, entryStatus, settlementPrincipal, supplierPayableMethod, supplierRemittance, validateSaleFinancials, type SellerCommissionRule } from "@/lib/finance";
+import { PRODUCT_TYPES, REFUND_KINDS, type CommercialModel } from "@/lib/constants";
 import { addDays, addMonths, startOfMonth } from "@/lib/dates";
 import { applyBps, sum } from "@/lib/money";
 import { pickCardFee } from "./admin";
 import { newKey } from "@/lib/utils";
 import { emitEvent } from "./automations";
-import { prepareContractForSale } from "./contracts";
+import { prepareContractForSale, syncTripContract, effectiveContract, tripContractInclude } from "./contracts";
 import { textContains, entryDelegate } from "./query";
+import { clientScope } from "./registry";
+import { settleEntryTx, reverseSettlementTx } from "./finance";
+import { findPaidCardBill, getCardBillsFor, paidBillBlockingReversal, planCardCharge } from "./cards";
 
 export type PlanItem = { key: string; dueDate: string; amountCents: number; method: string; description: string | null; payerClientId?: string | null };
 
@@ -21,6 +24,38 @@ export type PlanItem = { key: string; dueDate: string; amountCents: number; meth
 
 export function saleScope(ctx: Ctx): Prisma.SaleWhereInput {
   return can(ctx, "sales.view_all") ? { companyId: ctx.companyId } : { companyId: ctx.companyId, sellerId: ctx.userId };
+}
+
+/** Cliente sem documento para o contrato: sem CPF/CNPJ e, se estrangeiro, sem passaporte nem RNE. */
+export const CLIENT_DOC_MISSING: Prisma.SaleWhereInput = {
+  client: { document: null, NOT: { foreigner: true, OR: [{ passportNumber: { not: null } }, { rne: { not: null } }] } },
+};
+
+/**
+ * Passageiro ligado a um cadastro: completa só o que veio em branco (documento, nascimento,
+ * passaporte e validade) com os dados do cadastro. O que foi digitado na venda não é trocado.
+ */
+async function fillPassengersFromClients(tx: Tx, ctx: Ctx, passengers: SaleParsed["passengers"]) {
+  const ids = [...new Set(passengers.map((p) => p.clientId).filter(Boolean))] as string[];
+  if (!ids.length) return passengers;
+  const clients = await tx.client.findMany({
+    // Só completa a partir de cadastros que a pessoa pode ver: um id de fora do escopo fica ligado, sem copiar documentos.
+    where: { AND: [{ id: { in: ids } }, clientScope(ctx)] },
+    select: { id: true, document: true, foreigner: true, passportNumber: true, passportExpiry: true, rne: true, birthDate: true },
+  });
+  const byId = new Map(clients.map((c) => [c.id, c]));
+  return passengers.map((p) => {
+    const c = p.clientId ? byId.get(p.clientId) : null;
+    if (!c) return p;
+    const doc = c.document ?? (c.foreigner ? c.rne ?? c.passportNumber : null);
+    return {
+      ...p,
+      document: p.document || doc || null,
+      birthDate: p.birthDate || c.birthDate || null,
+      passportNumber: p.passportNumber || c.passportNumber || null,
+      passportExpiry: p.passportExpiry || (p.passportNumber && p.passportNumber !== c.passportNumber ? null : c.passportExpiry) || null,
+    };
+  });
 }
 
 async function getEditableSale(tx: Tx, ctx: Ctx, id: string) {
@@ -35,9 +70,35 @@ async function getEditableSale(tx: Tx, ctx: Ctx, id: string) {
 // Validação de entrada e regras
 // ---------------------------------------------------------------------------
 
-async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string) {
+/**
+ * Produtos pagos com o cartão da agência: o cartão precisa ser um cartão ativo da empresa.
+ * Na confirmação (ou em venda já confirmada) também é preciso ter o cartão, o custo e os dias do cartão.
+ */
+async function validateAgencyCards(tx: Tx, ctx: Ctx, input: SaleParsed, confirming: boolean, keptCardIds: Set<string>) {
+  const issues: { field: string; message: string }[] = [];
+  const cardIdx = input.items.map((i, idx) => ({ i, idx })).filter(({ i }) => i.supplierPayment === "CARTAO_AGENCIA");
+  if (!cardIdx.length) return;
+  const ids = [...new Set(cardIdx.map(({ i }) => i.supplierCardAccountId).filter(Boolean))] as string[];
+  const cards = ids.length ? await tx.financialAccount.findMany({ where: { id: { in: ids }, companyId: ctx.companyId, type: "CARTAO_CREDITO" } }) : [];
+  // cartão desativado depois da venda continua valendo nos produtos que já estavam nele
+  const byId = new Map(cards.filter((c) => c.active || keptCardIds.has(c.id)).map((c) => [c.id, c]));
+  for (const { i, idx } of cardIdx) {
+    const field = `items.${idx}.supplierCardAccountId`;
+    if (i.supplierCardAccountId) {
+      const card = byId.get(i.supplierCardAccountId);
+      if (!card) issues.push({ field, message: "Escolha um cartão da agência ativo." });
+      else if (confirming && (!card.closingDay || !card.dueDay))
+        issues.push({ field, message: `Informe o dia de fechamento e o dia de vencimento do cartão "${card.name}" em Financeiro › Contas e saldos.` });
+    } else if (confirming) issues.push({ field, message: "Escolha qual cartão da agência foi usado." });
+    if (confirming && i.costCents <= 0) issues.push({ field: `items.${idx}.costCents`, message: "Informe o custo do fornecedor para lançar no cartão." });
+  }
+  if (issues.length) throw new AppError(issues.some((x) => x.message.startsWith("Escolha um")) ? "Cartão da agência inválido." : issues[0].message, "VALIDATION", issues);
+}
+
+async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string, confirming = input.confirm, keptCardIds = new Set<string>()) {
   const client = await tx.client.findFirst({ where: { id: input.clientId, companyId: ctx.companyId, archivedAt: null } });
   if (!client) throw new AppError("Cliente não encontrado.", "VALIDATION", [{ field: "clientId", message: "Selecione um cliente válido." }]);
+  await validateAgencyCards(tx, ctx, input, confirming, keptCardIds);
   const supplierIds = [...new Set([...input.items.flatMap((i) => [i.supplierId, i.operatorId]), input.intermediaryId].filter(Boolean))] as string[];
   if (supplierIds.length) {
     const count = await tx.supplier.count({ where: { id: { in: supplierIds }, companyId: ctx.companyId } });
@@ -76,6 +137,18 @@ async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string
     sellerId = seller.id;
   }
   return { client, sellerId };
+}
+
+/** Campos de "como o fornecedor é pago" gravados no produto (já normalizados pelo schema). */
+function supplierPaymentData(i: SaleParsed["items"][number]) {
+  return {
+    supplierPayment: i.supplierPayment,
+    supplierPayMethod: i.supplierPayMethod,
+    supplierCardAccountId: i.supplierCardAccountId,
+    supplierCardInstallments: i.supplierCardInstallments,
+    supplierCardStartInstallment: i.supplierCardStartInstallment,
+    supplierCardFirstBillMonth: i.supplierCardFirstBillMonth,
+  };
 }
 
 function computeTotals(input: SaleParsed) {
@@ -190,7 +263,7 @@ export function commissionDueDate(saleDate: string, payDay: number) {
 }
 
 /** Aplica todas as consequências de uma venda confirmada. Pode ser chamada várias vezes sem duplicar nada. */
-export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
+export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string, opts?: { supplierPaymentChanged?: Set<string> }) {
   const sale = await tx.sale.findFirstOrThrow({
     where: { id: saleId, companyId: ctx.companyId },
     include: { items: { include: { supplier: true, operator: true } }, client: true, seller: true, company: true, intermediary: true },
@@ -249,12 +322,23 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
     { origin: "TAXA_CARTAO", saleId, category: "TAXA_CARTAO" },
   );
 
-  // 2) Contas a pagar a fornecedores (custos dos itens em intermediação/revenda)
+  // 2) Contas a pagar a fornecedores (custos dos itens em que a agência paga o fornecedor)
+  // 2a) Compras no cartão da agência lançadas pela venda: refaz as que mudaram ANTES de mexer nas contas,
+  //     senão a regra "valor menor que o já baixado" travaria a edição.
+  const cardItems = new Map(
+    sale.items.filter((i) => i.commercialModel !== "COMISSAO" && i.supplierPayment === "CARTAO_AGENCIA" && i.costCents > 0 && i.supplierCardAccountId).map((i) => [i.id, i]),
+  );
+  await reconcileCardPurchases(tx, ctx, sale, cardItems);
   const existingPay = await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "CUSTO_VENDA" } });
   const defaultSupplierDue = sale.tripStart && sale.tripStart > sale.saleDate ? addDays(sale.tripStart, -7) : addDays(sale.saleDate, 7);
   const costItems = sale.items.filter((i) => i.commercialModel !== "COMISSAO" && i.costCents > 0);
   for (const item of costItems) {
     const key = `item:${item.id}:custo`;
+    const paidNow = item.supplierPayment === "CARTAO_AGENCIA" || item.supplierPayment === "A_VISTA";
+    const existing = existingPay.find((p) => p.sourceKey === key);
+    // A forma prevista só é gravada quando a conta nasce (ou renasce) ou quando a forma de pagar o fornecedor
+    // mudou na venda; fora disso, vale o que o financeiro ajustou na conta.
+    const setMethod = !existing || existing.status === "CANCELADO" || !!opts?.supplierPaymentChanged?.has(item.id);
     await syncEntries(
       tx,
       "payable",
@@ -264,8 +348,10 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
         {
           sourceKey: key,
           amountCents: item.costCents,
-          dueDate: item.supplierDueDate ?? (defaultSupplierDue < sale.saleDate ? sale.saleDate : defaultSupplierDue),
+          // no cartão é a data da compra e à vista a do pagamento: sem data, usa a da venda
+          dueDate: item.supplierDueDate ?? (paidNow || defaultSupplierDue < sale.saleDate ? sale.saleDate : defaultSupplierDue),
           description: `${sale.code} · ${(item.operator ?? item.supplier)?.name ?? "Fornecedor"} · ${item.description ?? item.productType}`,
+          ...(setMethod ? { method: supplierPayableMethod(item) } : {}),
         },
       ],
       { origin: "CUSTO_VENDA", saleId, saleItemId: item.id, supplierId: item.operatorId ?? item.supplierId, category: "FORNECEDORES" },
@@ -273,6 +359,8 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
   }
   const keptCostKeys = new Set(costItems.map((i) => `item:${i.id}:custo`));
   await syncEntries(tx, "payable", ctx, existingPay.filter((p) => !keptCostKeys.has(p.sourceKey ?? "")), [], {});
+  // 2b) Fornecedor pago com o cartão da agência: a conta já nasce paga e o valor vai para as faturas.
+  const warnings = await chargeCardPurchases(tx, ctx, sale, cardItems);
 
   // 3) Comissões a receber de fornecedores (modelo COMISSAO)
   const existingSupComm = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "COMISSAO_FORNECEDOR" } });
@@ -296,7 +384,11 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
         {
           sourceKey: key,
           amountCents: amount,
-          dueDate: item.supplierDueDate ?? addDays(sale.tripEnd ?? sale.saleDate, 30),
+          // No cartão da agência e à vista, a data do produto é a da compra/pagamento ao fornecedor (o sistema
+          // grava a da venda quando fica vazia): não serve de vencimento do over, que segue o retorno da viagem.
+          dueDate:
+            (!isComm && (item.supplierPayment === "CARTAO_AGENCIA" || item.supplierPayment === "A_VISTA") ? null : item.supplierDueDate) ??
+            addDays(sale.tripEnd ?? sale.saleDate, 30),
           description: `${sale.code} · ${isComm ? "Comissão" : "Over"} ${who}`,
           category: isComm ? "COMISSAO_FORNECEDOR" : "OVER",
         },
@@ -381,7 +473,128 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string) {
   }
 
   // 6) Contrato
-  await prepareContractForSale(tx, ctx.companyId, saleId);
+  await prepareContractForSale(tx, ctx.companyId, saleId, { ctx });
+  return { warnings };
+}
+
+type SaleForCard = { id: string; code: string; saleDate: string };
+type CardItem = {
+  id: string;
+  productType: string;
+  description: string | null;
+  costCents: number;
+  supplierDueDate: string | null;
+  supplierCardAccountId: string | null;
+  supplierCardInstallments: number;
+  supplierCardStartInstallment: number;
+  supplierCardFirstBillMonth: string | null;
+};
+export const CARD_AUTO_PREFIX = "venda-cartao:";
+const itemLabel = (i: { description: string | null; productType: string }) => i.description || PRODUCT_TYPES.label(i.productType);
+/** Data da compra no cartão: a informada no produto ou a data da venda. */
+const cardPurchaseDate = (sale: SaleForCard, i: CardItem) => i.supplierDueDate ?? sale.saleDate;
+
+/**
+ * Estorna as compras no cartão lançadas pela venda que não batem mais com o produto (cartão, valor,
+ * parcelas, data ou fatura mudaram; produto removido ou deixou de ser pago no cartão). As que batem
+ * ficam como estão, para não refazer à toa a cada edição. Baixas feitas à mão no Financeiro não são tocadas.
+ */
+async function reconcileCardPurchases(tx: Tx, ctx: Ctx, sale: SaleForCard, cardItems: Map<string, CardItem>) {
+  const autos = await tx.settlement.findMany({
+    where: { companyId: ctx.companyId, autoKey: { startsWith: CARD_AUTO_PREFIX }, reversedAt: null, payable: { saleId: sale.id } },
+    include: { payable: { select: { description: true } } },
+  });
+  for (const s of autos) {
+    const item = cardItems.get(s.autoKey!.slice(CARD_AUTO_PREFIX.length));
+    if (item && s.payableId) {
+      const others = await tx.settlement.findMany({ where: { payableId: s.payableId, reversedAt: null, id: { not: s.id } } });
+      const manualCents = sum(others.map((o) => settlementPrincipal(o.amountCents, o.interestCents, o.discountCents)));
+      const same =
+        s.accountId === item.supplierCardAccountId &&
+        s.amountCents === item.costCents - manualCents &&
+        s.cardInstallments === item.supplierCardInstallments &&
+        s.cardStartInstallment === item.supplierCardStartInstallment &&
+        (s.cardFirstBillMonth ?? null) === (item.supplierCardFirstBillMonth ?? null) &&
+        s.date === cardPurchaseDate(sale, item);
+      if (same) continue;
+    }
+    const paidBill = await paidBillBlockingReversal(tx, s);
+    if (paidBill)
+      throw new AppError(
+        `A compra no cartão de "${s.payable?.description ?? "fornecedor"}" está na fatura "${paidBill}", que já foi paga. Para mudar ou tirar essa compra, estorne antes o pagamento da fatura no Financeiro.`,
+        "CONFLICT",
+      );
+    const reason = item ? "Venda alterada: compra no cartão refeita" : "Venda alterada: produto removido ou deixou de ser pago no cartão";
+    await reverseSettlementTx(tx, ctx, s, reason);
+    await audit(tx, ctx, "venda.fornecedor_cartao_estornado", "Sale", sale.id, { settlementId: s.id, saleItemId: s.autoKey!.slice(CARD_AUTO_PREFIX.length), amountCents: s.amountCents, reason });
+  }
+}
+
+/**
+ * Lança no cartão da agência o saldo da conta de cada fornecedor pago no cartão (sem permissão do
+ * financeiro: é o registro de uma compra já feita, e fica na auditoria). Se a compra cairia numa
+ * fatura já paga, não falha: a conta fica em aberto com a forma "Cartão de crédito" e volta um aviso.
+ */
+async function chargeCardPurchases(tx: Tx, ctx: Ctx, sale: SaleForCard, cardItems: Map<string, CardItem>) {
+  const warnings: string[] = [];
+  for (const item of cardItems.values()) {
+    const p = await tx.payable.findUnique({ where: { companyId_sourceKey: { companyId: ctx.companyId, sourceKey: `item:${item.id}:custo` } } });
+    if (!p || p.status === "CANCELADO") continue;
+    const autoKey = `${CARD_AUTO_PREFIX}${item.id}`;
+    if (await tx.settlement.findFirst({ where: { payableId: p.id, autoKey, reversedAt: null } })) continue;
+    const balance = p.amountCents - p.settledCents;
+    if (balance <= 0) continue;
+    if (p.invoiceId)
+      throw new AppError(`O custo de "${itemLabel(item)}" já está na fatura do fornecedor. Tire da fatura antes de marcar como pago no cartão.`, "CONFLICT");
+    const account = await tx.financialAccount.findFirst({ where: { id: item.supplierCardAccountId!, companyId: ctx.companyId, type: "CARTAO_CREDITO", active: true } });
+    if (!account) {
+      warnings.push(`${itemLabel(item)}: o cartão escolhido não está mais ativo, então a compra não foi lançada no cartão.`);
+      continue;
+    }
+    const date = cardPurchaseDate(sale, item);
+    const opts = { firstMonth: item.supplierCardFirstBillMonth, startInstallment: item.supplierCardStartInstallment };
+    const plan = planCardCharge(account, { date, amountCents: balance, cardInstallments: item.supplierCardInstallments }, opts);
+    const paid = await findPaidCardBill(tx, ctx.companyId, account, plan);
+    if (paid) {
+      warnings.push(
+        `${itemLabel(item)}: a fatura de ${paid.label} do cartão "${account.name}" já está paga, então a compra não foi lançada no cartão. A conta do fornecedor ficou em aberto; no Financeiro, registre o pagamento com o cartão escolhendo a fatura seguinte.`,
+      );
+      await audit(tx, ctx, "venda.fornecedor_cartao_pendente", "Sale", sale.id, { saleItemId: item.id, accountId: account.id, faturaPaga: paid.month });
+      continue;
+    }
+    const r = await settleEntryTx(
+      tx,
+      ctx,
+      "payable",
+      p.id,
+      {
+        date,
+        amountCents: balance,
+        interestCents: 0,
+        discountCents: 0,
+        accountId: account.id,
+        method: null,
+        notes: "Pago com o cartão da agência ao confirmar a venda",
+        cardInstallments: item.supplierCardInstallments,
+        cardFirstBillMonth: item.supplierCardFirstBillMonth,
+        cardStartInstallment: item.supplierCardStartInstallment,
+        autoKey,
+      },
+      { viaInvoice: false },
+    );
+    // Sem data informada, a compra foi lançada com a data da venda: grava essa data no produto, para que
+    // corrigir depois só a data da venda não refaça a compra em outra fatura (nem trave a edição por fatura paga).
+    if (!item.supplierDueDate) await tx.saleItem.update({ where: { id: item.id }, data: { supplierDueDate: date } });
+    await audit(tx, ctx, "venda.fornecedor_pago_cartao", "Sale", sale.id, {
+      saleItemId: item.id,
+      settlementId: r.settlementId,
+      accountId: account.id,
+      amountCents: balance,
+      parcelas: item.supplierCardInstallments,
+      parcelaInicial: item.supplierCardStartInstallment,
+    });
+  }
+  return warnings;
 }
 
 export async function refreshCommissionStatus(tx: Tx, commissionId: string) {
@@ -419,6 +632,7 @@ export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" 
 
   return prisma.$transaction(async (tx) => {
     const { client, sellerId } = await validateRefs(tx, ctx, input);
+    let warnings: string[] = [];
     const number = await nextNumber(tx, ctx.companyId);
     const code = `V-${input.saleDate.slice(0, 4)}-${String(number).padStart(4, "0")}`;
     const status = input.confirm ? "CONFIRMADA" : "ORCAMENTO";
@@ -451,19 +665,20 @@ export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" 
             duCents: i.duCents,
             overCents: i.overCents,
             cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
+            ...supplierPaymentData(i),
             sortOrder: idx,
           })),
         },
-        passengers: { create: input.passengers.map((p) => ({ ...p, companyId: ctx.companyId })) },
+        passengers: { create: (await fillPassengersFromClients(tx, ctx, input.passengers)).map((p) => ({ ...p, companyId: ctx.companyId })) },
       },
     });
     if (!client.ownerId) await tx.client.update({ where: { id: client.id }, data: { ownerId: sellerId } });
     if (input.confirm) {
-      await syncConfirmedSale(tx, ctx, sale.id);
+      ({ warnings } = await syncConfirmedSale(tx, ctx, sale.id));
       await emitConfirmed(tx, ctx, sale.id, code, client, totals.grossCents);
     }
     await audit(tx, ctx, input.confirm ? "venda.criada_confirmada" : "venda.criada_rascunho", "Sale", sale.id, { code, grossCents: totals.grossCents });
-    return { id: sale.id, code };
+    return { id: sale.id, code, warnings };
   });
 }
 
@@ -481,11 +696,26 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
     }
     const willBeConfirmed = sale.status !== "ORCAMENTO" || input.confirm;
     const totals = computeTotals({ ...input, confirm: willBeConfirmed });
-    const { client, sellerId } = await validateRefs(tx, ctx, { ...input, sellerId: input.sellerId ?? sale.sellerId }, id);
+    const keptCardIds = new Set(sale.items.map((i) => i.supplierCardAccountId).filter(Boolean) as string[]);
+    const { client, sellerId } = await validateRefs(tx, ctx, { ...input, sellerId: input.sellerId ?? sale.sellerId }, id, willBeConfirmed, keptCardIds);
 
     // Itens: atualiza os que mantêm id, cria novos e remove os excluídos.
     const keepIds = new Set(input.items.map((i) => i.id).filter(Boolean) as string[]);
     for (const kid of keepIds) if (!sale.items.some((i) => i.id === kid)) throw new AppError("Produto inválido na venda.");
+    // produtos mantidos em que a forma de pagar o fornecedor mudou: a conta a pagar recebe a forma nova
+    const supplierPaymentChanged = new Set(
+      input.items
+        .filter((i) => {
+          const old = i.id ? sale.items.find((o) => o.id === i.id) : null;
+          return (
+            !!old &&
+            (old.supplierPayment !== i.supplierPayment ||
+              (old.supplierPayMethod ?? null) !== (i.supplierPayMethod ?? null) ||
+              (old.supplierCardAccountId ?? null) !== (i.supplierCardAccountId ?? null))
+          );
+        })
+        .map((i) => i.id!),
+    );
     await tx.saleItem.deleteMany({ where: { saleId: id, companyId: ctx.companyId, id: { notIn: [...keepIds] } } });
     for (const [idx, i] of input.items.entries()) {
       const data = {
@@ -503,13 +733,17 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
         duCents: i.duCents,
         overCents: i.overCents,
         cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
+        ...supplierPaymentData(i),
         sortOrder: idx,
       };
       if (i.id) await tx.saleItem.update({ where: { id: i.id }, data });
       else await tx.saleItem.create({ data: { ...data, companyId: ctx.companyId, saleId: id } });
     }
     await tx.passenger.deleteMany({ where: { saleId: id, companyId: ctx.companyId } });
-    if (input.passengers.length) await tx.passenger.createMany({ data: input.passengers.map((p) => ({ ...p, companyId: ctx.companyId, saleId: id })) });
+    if (input.passengers.length) {
+      const passengers = await fillPassengersFromClients(tx, ctx, input.passengers);
+      await tx.passenger.createMany({ data: passengers.map((p) => ({ ...p, companyId: ctx.companyId, saleId: id })) });
+    }
 
     const confirmingNow = sale.status === "ORCAMENTO" && input.confirm;
     await tx.sale.update({
@@ -522,15 +756,21 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
       },
     });
     if (approvedRequestId) await tx.editRequest.update({ where: { id: approvedRequestId }, data: { status: "UTILIZADA" } });
+    let warnings: string[] = [];
     if (willBeConfirmed) {
-      await syncConfirmedSale(tx, ctx, id);
+      ({ warnings } = await syncConfirmedSale(tx, ctx, id, { supplierPaymentChanged }));
       await emitConfirmed(tx, ctx, id, sale.code, client, totals.grossCents);
+    }
+    // saiu de uma viagem (ou trocou de viagem): o contrato da viagem antiga é refeito sem ela
+    if (sale.tripId && sale.tripId !== (input.tripId ?? null)) {
+      await syncTripContract(tx, ctx.companyId, sale.tripId, { ctx });
+      if (willBeConfirmed) await prepareContractForSale(tx, ctx.companyId, id, { ctx });
     }
     await audit(tx, ctx, confirmingNow ? "venda.confirmada" : "venda.alterada", "Sale", id, {
       antes: { grossCents: sale.grossCents, costCents: sale.costCents, sellerCommissionCents: sale.sellerCommissionCents },
       depois: { grossCents: totals.grossCents, costCents: totals.costCents, sellerCommissionCents: totals.sellerCommissionCents },
     });
-    return { id, code: sale.code };
+    return { id, code: sale.code, warnings };
   });
 }
 
@@ -538,9 +778,11 @@ export async function updateSale(ctx: Ctx, id: string, raw: unknown) {
  * Cancela a venda de forma controlada:
  * - lançamentos sem baixa são cancelados;
  * - lançamentos com baixa parcial têm o saldo restante encerrado (o valor baixado é preservado);
- * - nada que já foi pago é apagado — devoluções ao cliente devem ser lançadas no financeiro.
+ * - nada que já foi pago é apagado — devoluções ao cliente devem ser lançadas no financeiro;
+ * - compras no cartão da agência lançadas pela venda ficam na fatura, a não ser que se peça para tirar
+ *   (reverseCardCharges). Fatura já paga nunca é mexida: a compra fica e volta um aviso.
  */
-export async function cancelSale(ctx: Ctx, id: string, reason: string) {
+export async function cancelSale(ctx: Ctx, id: string, reason: string, opts: { reverseCardCharges?: boolean } = {}) {
   if (!reason || reason.trim().length < 3) throw new AppError("Informe o motivo do cancelamento.");
   return prisma.$transaction(async (tx) => {
     const sale = await getEditableSale(tx, ctx, id);
@@ -549,6 +791,26 @@ export async function cancelSale(ctx: Ctx, id: string, reason: string) {
     const warnings: string[] = [];
     const now = new Date();
     const t = today(ctx);
+
+    // Compras no cartão da agência lançadas por esta venda
+    const keptCard = new Set<string>();
+    const autos = await tx.settlement.findMany({
+      where: { companyId: ctx.companyId, autoKey: { startsWith: CARD_AUTO_PREFIX }, reversedAt: null, payable: { saleId: id } },
+      include: { account: { select: { name: true } }, payable: { select: { description: true } } },
+    });
+    for (const s of autos) {
+      const what = s.payable?.description ?? "Fornecedor";
+      if (opts.reverseCardCharges && !(await paidBillBlockingReversal(tx, s))) {
+        await reverseSettlementTx(tx, ctx, s, "Venda cancelada: compra tirada do cartão");
+        continue;
+      }
+      keptCard.add(s.payableId!);
+      warnings.push(
+        opts.reverseCardCharges
+          ? `${what}: a compra no cartão ${s.account.name} já está numa fatura paga e foi mantida. Lance o reembolso do fornecedor na venda.`
+          : `${what}: compra no cartão ${s.account.name} mantida na fatura.`,
+      );
+    }
 
     for (const kind of ["receivable", "payable"] as const) {
       const model = entryDelegate(tx, kind);
@@ -568,7 +830,7 @@ export async function cancelSale(ctx: Ctx, id: string, reason: string) {
             },
           });
           warnings.push(`${e.description}: ${money(e.settledCents)} já baixado foi mantido.`);
-        } else {
+        } else if (!keptCard.has(e.id)) {
           warnings.push(`${e.description}: ${money(e.settledCents)} já baixado foi mantido.`);
         }
       }
@@ -577,8 +839,10 @@ export async function cancelSale(ctx: Ctx, id: string, reason: string) {
     const commission = await tx.commission.findUnique({ where: { saleId: id } });
     if (commission) await refreshCommissionStatus(tx, commission.id);
     await tx.reservation.updateMany({ where: { saleId: id, companyId: ctx.companyId }, data: { status: "CANCELADA" } });
-    await tx.contract.updateMany({ where: { saleId: id, companyId: ctx.companyId, status: { not: "CANCELADO" } }, data: { status: "CANCELADO" } });
-    await audit(tx, ctx, "venda.cancelada", "Sale", id, { reason, warnings });
+    // o contrato da viagem não é cancelado pela venda-base: a viagem troca a base ou marca o contrato como desatualizado
+    await tx.contract.updateMany({ where: { saleId: id, companyId: ctx.companyId, tripId: null, status: { not: "CANCELADO" } }, data: { status: "CANCELADO" } });
+    if (sale.tripId) await syncTripContract(tx, ctx.companyId, sale.tripId, { ctx });
+    await audit(tx, ctx, "venda.cancelada", "Sale", id, { reason, warnings, tirarComprasDoCartao: !!opts.reverseCardCharges });
     return { warnings };
   });
 }
@@ -588,6 +852,13 @@ export async function duplicateSale(ctx: Ctx, id: string) {
   const sale = await prisma.sale.findFirst({ where: { id, ...saleScope(ctx) }, include: { items: true, passengers: true } });
   if (!sale) throw new AppError("Venda não encontrada.", "NOT_FOUND");
   const plan = JSON.parse(sale.paymentPlanJson) as PlanItem[];
+  // Cartão desativado depois da venda: a cópia nasce sem cartão (o rascunho aceita) e o usuário escolhe outro ao confirmar.
+  const cardIds = [...new Set(sale.items.map((i) => i.supplierCardAccountId).filter(Boolean))] as string[];
+  const activeCards = new Set(
+    cardIds.length
+      ? (await prisma.financialAccount.findMany({ where: { id: { in: cardIds }, companyId: ctx.companyId, type: "CARTAO_CREDITO", active: true }, select: { id: true } })).map((c) => c.id)
+      : [],
+  );
   return createSale(ctx, {
     saleDate: today(ctx),
     clientId: sale.clientId,
@@ -621,6 +892,10 @@ export async function duplicateSale(ctx: Ctx, id: string) {
       duCents: i.duCents,
       overCents: i.overCents,
       cardFeeCents: i.cardFeeCents,
+      supplierPayment: i.supplierPayment as SaleParsed["items"][number]["supplierPayment"],
+      supplierPayMethod: i.supplierPayMethod,
+      supplierCardAccountId: i.supplierCardAccountId && activeCards.has(i.supplierCardAccountId) ? i.supplierCardAccountId : null,
+      supplierCardInstallments: i.supplierCardInstallments,
     })),
     payments: plan.map((p) => ({ ...p, key: newKey(), dueDate: today(ctx) })),
     passengers: [],
@@ -668,7 +943,7 @@ export type SaleListFilters = {
 export async function listSales(ctx: Ctx, f: SaleListFilters) {
   const extra: Prisma.SaleWhereInput[] = [];
   if (f.pending)
-    extra.push({ status: "CONFIRMADA", OR: [{ destination: null }, { tripStart: null }, { locator: null }, { client: { document: null } }] });
+    extra.push({ status: "CONFIRMADA", OR: [{ destination: null }, { tripStart: null }, { locator: null }, CLIENT_DOC_MISSING] });
   if (f.upcomingTripDays)
     extra.push({ status: "CONFIRMADA", tripStart: { gte: today(ctx), lte: addDays(today(ctx), f.upcomingTripDays) } });
   const where: Prisma.SaleWhereInput = {
@@ -714,8 +989,8 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
       client: { select: { id: true, name: true } },
       seller: { select: { id: true, name: true } },
       receivables: { where: { origin: "VENDA" }, select: { amountCents: true, settledCents: true, status: true, dueDate: true } },
-      contracts: { select: { status: true } },
-      trip: { select: { id: true, code: true } },
+      contracts: { select: { status: true, tripId: true, saleIdsJson: true } },
+      trip: tripContractInclude({ status: true, tripId: true }),
       _count: { select: { items: true } },
     },
     ...(f.financial ? {} : { skip: (page - 1) * pageSize, take: pageSize }),
@@ -733,8 +1008,15 @@ export async function listSales(ctx: Ctx, f: SaleListFilters) {
     grossProfitCents: can(ctx, "sales.view_margin") ? s.grossProfitCents : null,
     marginBps: can(ctx, "sales.view_margin") ? s.marginBps : null,
     financialStatus: saleFinancialStatus(s.status, s.receivables, t),
-    contractStatus: s.contracts[0]?.status ?? "NAO_GERADO",
-    trip: s.trip,
+    contractStatus: effectiveContract(s)?.status ?? "NAO_GERADO",
+    /** a venda está no contrato da viagem (não tem contrato próprio) */
+    inTripContract: !!effectiveContract(s)?.tripId,
+    /** no contrato da viagem, mas incluída depois da emissão: ainda não está no texto */
+    tripContractPending: (() => {
+      const c = effectiveContract(s);
+      return !!c?.tripId && !(JSON.parse(c.saleIdsJson) as string[]).includes(s.id);
+    })(),
+    trip: s.trip ? { id: s.trip.id, code: s.trip.code } : null,
     itemCount: s._count.items,
     tripStart: s.tripStart,
   }));
@@ -770,13 +1052,21 @@ export async function getSale(ctx: Ctx, id: string) {
       seller: { select: { id: true, name: true } },
       createdBy: { select: { name: true } },
       items: {
-        include: { supplier: { select: { id: true, name: true } }, operator: { select: { id: true, name: true } }, reservation: true },
+        include: { supplier: { select: { id: true, name: true } }, operator: { select: { id: true, name: true } }, supplierCardAccount: { select: { id: true, name: true } }, reservation: true },
         orderBy: { sortOrder: "asc" },
       },
       passengers: { include: { client: { select: { id: true, name: true } } } },
       receivables: { orderBy: [{ dueDate: "asc" }], include: { settlements: { where: { reversedAt: null } }, client: { select: { id: true, name: true } } } },
       payables: { orderBy: [{ dueDate: "asc" }], include: { invoice: { select: { id: true, number: true, status: true } } } },
-      trip: { select: { id: true, code: true, title: true } },
+      trip: {
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          contracts: { where: { status: { not: "CANCELADO" } }, take: 1 },
+          sales: { where: { status: { in: ["CONFIRMADA", "CONCLUIDA"] } }, select: { id: true, code: true, contracts: { select: { id: true } } }, orderBy: [{ saleDate: "asc" }, { createdAt: "asc" }] },
+        },
+      },
       excursion: { select: { id: true, code: true, name: true } },
       intermediary: { select: { id: true, name: true } },
       attachments: { orderBy: { createdAt: "desc" } },
@@ -787,6 +1077,26 @@ export async function getSale(ctx: Ctx, id: string) {
   if (!sale) throw new AppError("Venda não encontrada.", "NOT_FOUND");
   const showMargin = can(ctx, "sales.view_margin");
   const canFinance = can(ctx, "finance.view");
+  // Compras no cartão da agência lançadas pela venda: em quais faturas caíram
+  const cardAutos = await prisma.settlement.findMany({
+    where: { companyId: ctx.companyId, reversedAt: null, autoKey: { in: sale.items.map((i) => `${CARD_AUTO_PREFIX}${i.id}`) } },
+    select: { id: true, autoKey: true, cardBillsJson: true },
+  });
+  const cardBills = await getCardBillsFor(prisma as unknown as Tx, ctx.companyId, cardAutos);
+  // só o mês da fatura ("dez/2026"): o nome do cartão já aparece em "Fornecedor: pago no cartão ..."
+  const cardByItem = new Map(cardAutos.map((c) => [c.autoKey!.slice(CARD_AUTO_PREFIX.length), (cardBills[c.id] ?? []).map((b) => b.description.split(" · ").pop() ?? b.description)]));
+  // venda cancelada: compras tiradas do cartão no cancelamento
+  const cardReversed =
+    sale.status === "CANCELADA"
+      ? new Set(
+          (
+            await prisma.settlement.findMany({
+              where: { companyId: ctx.companyId, reversedAt: { not: null }, reversalReason: { startsWith: "Venda cancelada" }, autoKey: { in: sale.items.map((i) => `${CARD_AUTO_PREFIX}${i.id}`) } },
+              select: { autoKey: true },
+            })
+          ).map((r) => r.autoKey!.slice(CARD_AUTO_PREFIX.length)),
+        )
+      : new Set<string>();
   return {
     ...sale,
     costCents: showMargin ? sale.costCents : null,
@@ -800,6 +1110,10 @@ export async function getSale(ctx: Ctx, id: string) {
       supplierCommissionCents: showMargin ? i.supplierCommissionCents : null,
       overCents: showMargin ? i.overCents : null,
       cardFeeCents: showMargin ? i.cardFeeCents : null,
+      /** cartão da agência: faturas em que a compra caiu (null = ainda não lançada no cartão) */
+      cardBills: cardByItem.get(i.id) ?? null,
+      /** venda cancelada: a compra no cartão foi estornada no cancelamento */
+      cardReversedOnCancel: cardReversed.has(i.id),
     })),
     payables: canFinance ? sale.payables : [],
     plan: JSON.parse(sale.paymentPlanJson) as PlanItem[],
@@ -813,7 +1127,7 @@ export async function getSaleForEdit(ctx: Ctx, id: string) {
   const sale = await prisma.sale.findFirst({
     where: { id, ...saleScope(ctx) },
     include: {
-      client: { select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true } },
+      client: { select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true, foreigner: true, passportNumber: true, rne: true, nationality: true } },
       items: { orderBy: { sortOrder: "asc" } },
       passengers: true,
       receivables: { where: { origin: "VENDA" }, select: { sourceKey: true, settledCents: true, status: true } },

@@ -6,7 +6,7 @@ export const SUGGESTED_TEMPLATE_BODY = `CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE 
 [MODELO SUGERIDO: submeta à revisão jurídica da agência antes do uso e apague esta linha]
 
 CONTRATADA: {{agencia.nome}}, CNPJ {{agencia.documento}}.
-CONTRATANTE: {{cliente.nome}}, CPF/CNPJ {{cliente.documento}}, residente em {{cliente.endereco}}, telefone {{cliente.telefone}}, e-mail {{cliente.email}}.
+CONTRATANTE: {{cliente.nome}}, {{cliente.identificacao}}, residente em {{cliente.endereco}}, telefone {{cliente.telefone}}, e-mail {{cliente.email}}.
 
 1. OBJETO
 A CONTRATADA intermedeia, em nome do CONTRATANTE, a aquisição dos serviços turísticos abaixo, referentes à venda {{venda.codigo}} de {{venda.data}}:

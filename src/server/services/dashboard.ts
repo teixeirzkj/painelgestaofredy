@@ -2,7 +2,7 @@ import { prisma, Prisma } from "../db";
 import { can, today, type Ctx } from "../context";
 import { addDays, addMonths, endOfMonth, monthKey, monthsBetween, previousPeriod, startOfMonth, type Period } from "@/lib/dates";
 import { ratioBps, sum } from "@/lib/money";
-import { saleScope } from "./sales";
+import { CLIENT_DOC_MISSING, saleScope } from "./sales";
 import { computeDre } from "./dre";
 
 export type DashboardFilters = Period & { sellerId?: string; productType?: string; status?: string };
@@ -150,7 +150,7 @@ async function dashboardLists(ctx: Ctx, t: string, financial: boolean) {
       where: { companyId: ctx.companyId, status: { in: ["NAO_GERADO", "EM_PREPARACAO", "AGUARDANDO_ENVIO", "ENVIADO"] }, sale: { ...scope, status: { in: ["CONFIRMADA", "CONCLUIDA"] } } },
       orderBy: { updatedAt: "desc" },
       take: 6,
-      select: { id: true, status: true, missingFieldsJson: true, sale: { select: { code: true, client: { select: { name: true } } } } },
+      select: { id: true, status: true, missingFieldsJson: true, sale: { select: { code: true, client: { select: { name: true } } } }, trip: { select: { code: true } } },
     }),
     financial && can(ctx, "finance.view")
       ? prisma.receivable.findMany({
@@ -262,7 +262,7 @@ export async function getAlerts(ctx: Ctx, t: string, financial: boolean): Promis
     prisma.contract.findMany({ where: { companyId: c, status: { in: ["EM_PREPARACAO", "AGUARDANDO_ENVIO", "ENVIADO"] }, sale: { ...scope, status: { in: ["CONFIRMADA", "CONCLUIDA"] } } }, select: { status: true } }),
     prisma.sale.count({ where: { ...scope, status: "CONFIRMADA", tripStart: { gte: t, lte: addDays(t, company.upcomingTripDays) } } }),
     prisma.sale.findMany({
-      where: { ...scope, status: "CONFIRMADA", OR: [{ destination: null }, { tripStart: null }, { locator: null }, { client: { document: null } }] },
+      where: { ...scope, status: "CONFIRMADA", OR: [{ destination: null }, { tripStart: null }, { locator: null }, CLIENT_DOC_MISSING] },
       select: { id: true },
     }),
   ]);
@@ -270,7 +270,7 @@ export async function getAlerts(ctx: Ctx, t: string, financial: boolean): Promis
   const preparing = contracts.length - awaiting;
   if (awaiting) alerts.push({ key: "contratos-assinatura", severity: "warning", title: "Contratos aguardando assinatura", detail: `${awaiting} contrato(s) emitido(s) ou enviado(s)`, href: "/contratos?status=AGUARDANDO_ENVIO", count: awaiting });
   if (preparing) alerts.push({ key: "contratos-preparacao", severity: "info", title: "Contratos para conferir e emitir", detail: `${preparing} em preparação`, href: "/contratos?status=EM_PREPARACAO", count: preparing });
-  if (incomplete.length) alerts.push({ key: "vendas-incompletas", severity: "warning", title: "Vendas sem informações obrigatórias", detail: "Destino, data da viagem, localizador ou CPF do cliente", href: "/vendas?pendencias=1", count: incomplete.length });
+  if (incomplete.length) alerts.push({ key: "vendas-incompletas", severity: "warning", title: "Vendas sem informações obrigatórias", detail: "Destino, data da viagem, localizador ou documento do cliente", href: "/vendas?pendencias=1", count: incomplete.length });
   const passports = await prisma.sale.findMany({
     where: {
       ...scope,

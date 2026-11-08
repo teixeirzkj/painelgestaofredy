@@ -69,6 +69,9 @@ export function mapMondePerson(p: Person): ImportedClient {
     passportNumber: s("passport-number"),
     passportExpiry: s("passport-expiration"),
     notes: s("observations"),
+    // gender é texto livre no Monde: normalizeGender aceita F/M/feminino/masculino e ignora o resto.
+    // O Monde não tem nacionalidade nem RNE: estrangeiro não é deduzido daqui. (city é relacionamento; city-inscription não é usado.)
+    gender: s("gender"),
   };
 }
 

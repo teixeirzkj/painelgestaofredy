@@ -5,11 +5,13 @@
  * do atendente guardadas no atendimento. Assim, quem sai da tela e volta cai na mesma etapa.
  */
 import { prisma } from "@/server/db";
+import { hasClientDocument, missingDocLabel, type IdentityInput } from "@/lib/client-identity";
 import { assertCan, can, type Ctx } from "@/server/context";
 import { AppError } from "@/server/errors";
 import { clientScope } from "./registry";
 import { saleScope } from "./sales";
 import { contractPdf } from "./contract-pdf";
+import { contractNeverSent, effectiveContract, tripContractInclude } from "./contracts";
 import { noteOnCard, sendFileToClientChat } from "./fredy";
 
 export const BALCAO_STEPS = ["Card do Frédy", "Cliente", "Documentos", "Venda", "Contrato", "Enviar contrato", "Vouchers"] as const;
@@ -19,8 +21,8 @@ const ISSUED = ["AGUARDANDO_ENVIO", "ENVIADO", "ASSINADO"];
 const SENT = ["ENVIADO", "ASSINADO"];
 
 /** O que falta no cadastro para emitir o contrato. */
-export function clientMissing(c: { document: string | null; street: string | null }) {
-  return [!c.document && "CPF/CNPJ", !c.street && "endereço"].filter(Boolean) as string[];
+export function clientMissing(c: IdentityInput & { street: string | null }) {
+  return [!hasClientDocument(c) && missingDocLabel(c), !c.street && "endereço"].filter(Boolean) as string[];
 }
 
 type StepInput = {
@@ -116,21 +118,36 @@ export async function loadFlow(ctx: Ctx, id: string) {
           tripStart: true,
           grossCents: true,
           externalRef: true,
-          contracts: { select: { id: true, status: true, outdated: true }, orderBy: { createdAt: "desc" }, take: 1 },
+          tripId: true,
+          contracts: { select: { id: true, status: true, outdated: true, tripId: true }, orderBy: { createdAt: "desc" }, take: 1 },
+          trip: tripContractInclude({ id: true, status: true, outdated: true, tripId: true }),
           attachments: { orderBy: { createdAt: "desc" }, select: { id: true, fileName: true, mimeType: true, sizeBytes: true, kind: true, createdAt: true } },
         },
       })
     : null;
   const missing = clientMissing(client);
   const canContract = can(ctx, "contracts.manage");
+  // contrato que vale para a venda: o próprio ou o da viagem
+  const contract = sale ? effectiveContract(sale) : null;
   const steps = flowSteps({
     ...flow,
     clientComplete: missing.length === 0,
     saleStatus: sale?.status ?? null,
-    contractStatus: sale?.contracts[0]?.status ?? null,
-    contractOutdated: sale?.contracts[0]?.outdated ?? false,
+    contractStatus: contract?.status ?? null,
+    contractOutdated: contract?.outdated ?? false,
     canContract,
   });
+  // viagem com outras vendas confirmadas e sem contrato da viagem: atalho para juntar tudo em um contrato só
+  let tripOffer: { tripId: string; code: string; codes: string[] } | null = null;
+  if (sale?.trip && !sale.trip.contracts[0] && canContract && (sale.status === "CONFIRMADA" || sale.status === "CONCLUIDA")) {
+    const others = await prisma.sale.findMany({
+      where: { companyId: ctx.companyId, tripId: sale.trip.id, status: { in: ["CONFIRMADA", "CONCLUIDA"] } },
+      select: { code: true, contracts: { select: { status: true, externalId: true, sentAt: true } } },
+      orderBy: [{ saleDate: "asc" }, { createdAt: "asc" }],
+    });
+    const joinable = others.filter((o) => o.contracts.every(contractNeverSent));
+    if (joinable.length >= 2) tripOffer = { tripId: sale.trip.id, code: sale.trip.code, codes: joinable.map((o) => o.code) };
+  }
   // rascunhos do cliente que podem ser esta venda (ex.: o que chegou do Frédy quando o card virou ganho)
   const drafts = !sale
     ? await prisma.sale.findMany({
@@ -140,7 +157,8 @@ export async function loadFlow(ctx: Ctx, id: string) {
         take: 5,
       })
     : [];
-  return { flow, client, missing, sale, contract: sale?.contracts[0] ?? null, canContract, drafts, ...steps };
+  const tripContract = contract?.tripId && sale?.trip ? { code: sale.trip.code } : null;
+  return { flow, client, missing, sale, contract, tripContract, tripOffer, canContract, drafts, ...steps };
 }
 
 export type FlowMark = "data" | "docs" | "sent" | "finish";
@@ -155,7 +173,11 @@ export async function markFlow(ctx: Ctx, id: string, mark: FlowMark) {
     await prisma.balcaoFlow.update({ where: { id }, data: { docsDone: true } });
   } else if (mark === "sent") {
     if (!d.done[4]) throw new AppError("Emita o contrato antes de marcar como enviado.");
-    await prisma.balcaoFlow.update({ where: { id }, data: { contractSent: true } });
+    // o envio fica gravado no próprio contrato (sem mudar o status: ENVIADO é só a assinatura eletrônica)
+    await prisma.$transaction([
+      prisma.balcaoFlow.update({ where: { id }, data: { contractSent: true } }),
+      prisma.contract.update({ where: { id: d.contract!.id }, data: { sentAt: new Date() } }),
+    ]);
   } else {
     if (!d.done.slice(0, 6).every(Boolean)) throw new AppError("Ainda há etapas obrigatórias pendentes.");
     await prisma.balcaoFlow.update({ where: { id }, data: { finishedAt: new Date() } });
@@ -163,7 +185,8 @@ export async function markFlow(ctx: Ctx, id: string, mark: FlowMark) {
     const card = d.flow.fredyCardId ?? (d.sale?.externalRef?.startsWith("fredy:") ? d.sale.externalRef.slice(6) : null);
     if (card && d.sale) {
       const c = d.contract?.status === "ASSINADO" ? "assinado" : "emitido e enviado ao cliente";
-      await noteOnCard(ctx.companyId, card, `Atendimento concluído na venda rápida por ${ctx.userName}: venda ${d.sale.code} confirmada, contrato ${c}.`).catch(() => false);
+      const which = d.tripContract ? `contrato da viagem ${d.tripContract.code}` : "contrato";
+      await noteOnCard(ctx.companyId, card, `Atendimento concluído na venda rápida por ${ctx.userName}: venda ${d.sale.code} confirmada, ${which} ${c}.`).catch(() => false);
     }
   }
 }
@@ -190,18 +213,27 @@ export async function listOpenFlows(ctx: Ctx) {
     orderBy: { updatedAt: "desc" },
     take: 20,
     include: {
-      client: { select: { name: true, document: true, street: true } },
-      sale: { select: { code: true, status: true, contracts: { select: { status: true, outdated: true }, orderBy: { createdAt: "desc" }, take: 1 } } },
+      client: { select: { name: true, document: true, street: true, foreigner: true, passportNumber: true, rne: true } },
+      sale: {
+        select: {
+          id: true,
+          code: true,
+          status: true,
+          contracts: { select: { status: true, outdated: true }, orderBy: { createdAt: "desc" }, take: 1 },
+          trip: tripContractInclude({ status: true, outdated: true }),
+        },
+      },
     },
   });
   const canContract = can(ctx, "contracts.manage");
   return flows.map((f) => {
+    const contract = f.sale ? effectiveContract(f.sale) : null;
     const { current } = flowSteps({
       ...f,
       clientComplete: clientMissing(f.client).length === 0,
       saleStatus: f.sale?.status ?? null,
-      contractStatus: f.sale?.contracts[0]?.status ?? null,
-      contractOutdated: f.sale?.contracts[0]?.outdated ?? false,
+      contractStatus: contract?.status ?? null,
+      contractOutdated: contract?.outdated ?? false,
       canContract,
     });
     return { id: f.id, clientName: f.client.name, saleCode: f.sale?.code ?? null, current, updatedAt: f.updatedAt };
@@ -213,7 +245,7 @@ export async function sendContractViaFredy(ctx: Ctx, id: string) {
   const d = await loadFlow(ctx, id);
   if (!d.sale || !d.contract || !d.done[4]) throw new AppError("Emita o contrato antes de enviar.");
   const { bytes, fileName } = await contractPdf(ctx, d.contract.id);
-  const first = d.client.name.split(/s+/)[0];
+  const first = d.client.name.split(/\s+/)[0];
   const r = await sendFileToClientChat(
     ctx,
     {
@@ -222,10 +254,11 @@ export async function sendContractViaFredy(ctx: Ctx, id: string) {
       phone: d.client.whatsapp || d.client.phone,
     },
     { bytes, name: fileName, mimeType: "application/pdf", type: "PDF" },
-    `Olá ${first}! Segue o contrato da sua viagem (${d.sale.code}). Qualquer dúvida, estou à disposição.`,
+    `Olá ${first}! Segue o contrato da sua viagem (${d.tripContract?.code ?? d.sale.code}). Qualquer dúvida, estou à disposição.`,
   );
   await prisma.$transaction([
     prisma.balcaoFlow.update({ where: { id }, data: { contractSent: true } }),
+    prisma.contract.update({ where: { id: d.contract.id }, data: { sentAt: new Date() } }),
     ...(d.client.fredyContactId ? [] : [prisma.client.update({ where: { id: d.client.id }, data: { fredyContactId: r.contactId } })]),
   ]);
   return { previewUrl: r.previewUrl };

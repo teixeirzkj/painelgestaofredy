@@ -18,11 +18,12 @@ import { SaleForm } from "@/app/(app)/vendas/sale-form";
 import { editSaleFormData, newSaleFormData } from "@/app/(app)/vendas/sale-form-data";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
-import { formatDocument } from "@/lib/utils";
+import { clientDocHint } from "@/lib/client-identity";
 import { str, type Params, type SearchParams } from "@/lib/params";
 import { balcaoContext } from "../../shared";
 import { BalcaoHeader, StepBox } from "../../header";
 import { AttachDraftButton, AutoClose, DiscardFlowButton, FlowMarkButton, PrepareContractButton, SendViaFredyButton } from "../../flow-buttons";
+import { GenerateTripContractButton } from "@/components/trip-contract-button";
 
 const btn = "inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold";
 
@@ -39,6 +40,11 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
   const asked = Number(str(sp, "etapa"));
   const view = asked >= 2 && asked < d.current && d.done[asked - 1] ? asked : d.current;
   const { client, sale, contract } = d;
+  // contrato da viagem: um contrato só para as vendas da mesma viagem
+  const contractCode = d.tripContract?.code ?? sale?.code ?? "";
+  const tripOfferButton = d.tripOffer && (!contract || contract.status === "NAO_GERADO" || contract.status === "EM_PREPARACAO") && (
+    <GenerateTripContractButton tripId={d.tripOffer.tripId} codes={d.tripOffer.codes} openAfter={false} label="Juntar com as outras vendas da viagem em um contrato só" />
+  );
   const reviewing = view !== d.current;
   const goCurrent = (
     <Link href={base} className={`${btn} bg-brand-600 text-white hover:bg-brand-700`}>
@@ -51,14 +57,14 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
 
   if (view === 2) {
     body = (
-      <StepBox n={2} title="Cadastrar ou conferir o cliente" steps={["Confira nome, CPF/CNPJ, endereço, WhatsApp e e-mail.", "Se algo estiver errado ou faltando, clique em Editar."]}>
+      <StepBox n={2} title="Cadastrar ou conferir o cliente" steps={["Confira nome, documento (CPF ou, se estrangeiro, passaporte/RNE), endereço, WhatsApp e e-mail.", "Se algo estiver errado ou faltando, clique em Editar."]}>
         <div className="flex flex-wrap items-center gap-3 px-5 py-4">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-25 text-brand-700">
             <UserRound className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
             <p className="font-semibold text-ink">{client.name}</p>
-            <p className="text-sm text-muted">{[client.document && formatDocument(client.document), client.whatsapp || client.phone, client.email].filter(Boolean).join(" · ") || "sem documento e contato"}</p>
+            <p className="text-sm text-muted">{[clientDocHint(client), client.whatsapp || client.phone, client.email].filter(Boolean).join(" · ") || "sem documento e contato"}</p>
             <p className="text-xs text-muted">{[client.street, client.number, client.district, client.city, client.state].filter(Boolean).join(", ") || "sem endereço"}</p>
           </div>
           {!sale && <DiscardFlowButton id={flowId} to="/balcao?etapa=2" label="Trocar cliente" confirmText="Trocar o cliente deste atendimento? O cadastro continua na gestão." />}
@@ -70,7 +76,7 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
     );
   } else if (view === 3) {
     body = (
-      <StepBox n={3} title="Fotos dos documentos do cliente" optional steps={["Envie ou fotografe RG, CPF, CNH ou passaporte de quem vai viajar, com o número.", "Se o cliente ainda não mandou, pule e anexe depois."]}>
+      <StepBox n={3} title="Fotos dos documentos do cliente" optional steps={["Envie ou fotografe RG, CPF, CNH, passaporte ou RNE de quem vai viajar, com o número.", "Se o cliente ainda não mandou, pule e anexe depois."]}>
         <ClientDocuments clientId={client.id} docs={client.attachments} canManage todayStr={today(ctx)} />
         {footer(reviewing ? goCurrent : <FlowMarkButton id={flowId} mark="docs" label={client.attachments.length ? "Continuar" : "Pular por enquanto"} variant={client.attachments.length ? "primary" : "outline"} />)}
       </StepBox>
@@ -192,7 +198,17 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
     } else if (!full) {
       body = (
         <StepBox n={5} title="Emitir o contrato" steps={["O contrato desta venda ainda não foi gerado. Clique em Gerar o contrato."]}>
-          {footer(<PrepareContractButton saleId={sale.id} />)}
+          {d.tripOffer && (
+            <p className="px-5 pt-4 text-sm text-slate-600">
+              Esta venda está na viagem {d.tripOffer.code} com {d.tripOffer.codes.filter((c) => c !== sale.code).join(", ")}. Se quiser, junte tudo em um contrato só.
+            </p>
+          )}
+          {footer(
+            <>
+              {tripOfferButton}
+              <PrepareContractButton saleId={sale.id} />
+            </>,
+          )}
         </StepBox>
       );
     } else if (view === 5) {
@@ -217,12 +233,31 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
             </>,
           ]}
         >
+          {(full.tripId || tripOfferButton) && (
+            <div className="no-print flex flex-wrap items-center gap-3 border-b border-line bg-brand-25 px-5 py-3 text-sm text-slate-700">
+              {full.tripId && d.tripContract ? (
+                <p className="flex-1">
+                  Este é o contrato da viagem {d.tripContract.code}: junta as vendas {full.tripSales.included.map((s) => s.code).join(", ")}.
+                </p>
+              ) : (
+                <>
+                  <p className="flex-1">Esta venda está numa viagem com outras vendas confirmadas. Você pode juntar todas em um contrato só.</p>
+                  {tripOfferButton}
+                </>
+              )}
+            </div>
+          )}
           {(missing.length > 0 || blanks.length > 0 || full.outdated) && (
             <div className="no-print space-y-2 border-b border-line bg-amber-50 px-5 py-3 text-sm text-amber-900">
-              {full.outdated && <p><strong>A venda foi alterada depois da emissão.</strong> Clique em Atualizar prévia e emita o contrato de novo.</p>}
+              {full.outdated &&
+                (full.tripId ? (
+                  <p><strong>Uma venda da viagem foi alterada, incluída ou retirada depois da emissão.</strong> Clique em Atualizar prévia e emita o contrato de novo.</p>
+                ) : (
+                  <p><strong>A venda foi alterada depois da emissão.</strong> Clique em Atualizar prévia e emita o contrato de novo.</p>
+                ))}
               {missing.length > 0 && (
                 <p>
-                  <strong>Falta para emitir:</strong> {missing.join(", ")}. {missing.some((m) => /cliente|cpf|endere/i.test(m)) && <Link href={`${base}?etapa=2`} className="underline">Completar o cliente</Link>}
+                  <strong>Falta para emitir:</strong> {missing.join(", ")}. {missing.some((m) => /cliente|cpf|passaporte|rne|documento|endere/i.test(m)) && <Link href={`${base}?etapa=2`} className="underline">Completar o cliente</Link>}
                 </p>
               )}
               {blanks.length > 0 && (
@@ -235,7 +270,7 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
           <div className="print-area">
             <div className="no-print flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
               <p className="flex flex-1 items-center gap-2 text-sm font-semibold text-ink">
-                Contrato da venda {sale.code} <ContractStatusBadge s={full.status} />
+                {d.tripContract ? `Contrato da viagem ${d.tripContract.code}` : `Contrato da venda ${sale.code}`} <ContractStatusBadge s={full.status} />
               </p>
               <div className="flex flex-wrap gap-2">{actions}</div>
             </div>
@@ -284,8 +319,8 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
               <a
                 href={`https://wa.me/${wa}?text=${encodeURIComponent(
                   full.signUrl && full.status === "ENVIADO"
-                    ? `Olá ${firstName}! Segue o link para assinar o contrato da sua viagem (${sale.code}): ${full.signUrl}`
-                    : `Olá ${firstName}! Segue o contrato da sua viagem (${sale.code}). Qualquer dúvida, estou à disposição.`,
+                    ? `Olá ${firstName}! Segue o link para assinar o contrato da sua viagem (${contractCode}): ${full.signUrl}`
+                    : `Olá ${firstName}! Segue o contrato da sua viagem (${contractCode}). Qualquer dúvida, estou à disposição.`,
                 )}`}
                 target="_blank"
                 rel="noopener"
@@ -332,10 +367,10 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
             )}
             {contract &&
               (d.flow.contractSent && contract.status === "AGUARDANDO_ENVIO" ? (
-                <li>Contrato emitido e enviado ao cliente</li>
+                <li>{d.tripContract ? `Contrato da viagem ${d.tripContract.code} emitido e enviado ao cliente` : "Contrato emitido e enviado ao cliente"}</li>
               ) : (
                 <li>
-                  Contrato <ContractStatusBadge s={contract.status} />
+                  {d.tripContract ? `Contrato da viagem ${d.tripContract.code}` : "Contrato"} <ContractStatusBadge s={contract.status} />
                 </li>
               ))}
           </ul>

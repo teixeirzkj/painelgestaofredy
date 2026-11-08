@@ -8,6 +8,7 @@ import { FilterForm, FilterSearch, FilterSelect } from "@/components/filter-form
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { maskDocument } from "@/lib/utils";
+import { clientIdentity } from "@/lib/client-identity";
 import { int, str, withParams, type SearchParams } from "@/lib/params";
 import { NewClientButton } from "./client-buttons";
 import { ImportClientsButton } from "./import-clients";
@@ -38,7 +39,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
       <Card>
         <div className="border-b border-line px-4 py-3">
           <FilterForm>
-            <FilterSearch value={q} placeholder="Nome, CPF, telefone ou e-mail" />
+            <FilterSearch value={q} placeholder="Nome, CPF, passaporte, telefone ou e-mail" />
             <FilterSelect name="arquivados" label="Situação" value={archived ? "1" : ""} options={[{ value: "1", label: "Arquivados" }]} all="Ativos" />
           </FilterForm>
         </div>
@@ -70,12 +71,13 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
                         </Link>
                         <span className="flex items-center gap-1.5 text-xs text-muted">
                           {c.personType === "PJ" && <Badge tone="violet" className="py-0 text-[10px]">PJ</Badge>}
+                          {c.foreigner && <Badge tone="blue" className="py-0 text-[10px]">Estrangeiro</Badge>}
                           {c.city ? `${c.city}${c.state ? `/${c.state}` : ""}` : ""}
                         </span>
                       </span>
                     </div>
                   </Td>
-                  <Td className="text-slate-600">{maskDocument(c.document)}</Td>
+                  <Td className="text-slate-600">{c.document ? maskDocument(c.document) : (clientIdentity(c, { mask: true }) ?? "—")}</Td>
                   <Td className="text-slate-600">
                     {c.whatsapp ?? c.phone ?? "—"}
                     {c.email && <p className="text-xs text-muted">{c.email}</p>}

@@ -2,11 +2,15 @@
 import { useState } from "react";
 import { Plus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card, Field, Input, Select, Textarea } from "@/components/ui";
+import { Badge, Button, Card, Field, Input, Notice, Select, Textarea } from "@/components/ui";
 import { useAction } from "@/components/use-action";
 import { saveTemplateAction, createSuggestedTemplatesAction } from "@/app/actions";
 import { PRODUCT_TYPES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+
+/** Trecho dos modelos antigos que só serve para CPF/CNPJ (não identifica o cliente estrangeiro). */
+const OLD_DOC = /CPF\/CNPJ:?\s*\{\{\s*cliente\.documento\s*\}\}/;
+const OLD_DOC_ALL = new RegExp(OLD_DOC.source, "g");
 
 type T = { id: string | null; name: string; productType: string; body: string; clauses: string; active: boolean; version: number };
 
@@ -16,7 +20,7 @@ export function TemplatesEditor({ templates, variables }: { templates: T[]; vari
   const { run, busy } = useAction();
   const router = useRouter();
 
-  const blank: T = { id: null, name: "Novo modelo", productType: "OUTROS", body: "CONTRATO DE PRESTAÇÃO DE SERVIÇOS\n\nCONTRATANTE: {{cliente.nome}}, CPF/CNPJ {{cliente.documento}}\n\n{{clausulas}}", clauses: "", active: true, version: 0 };
+  const blank: T = { id: null, name: "Novo modelo", productType: "OUTROS", body: "CONTRATO DE PRESTAÇÃO DE SERVIÇOS\n\nCONTRATANTE: {{cliente.nome}}, {{cliente.identificacao}}\n\n{{clausulas}}", clauses: "", active: true, version: 0 };
 
   return (
     <div className="grid gap-6 lg:grid-cols-[260px_1fr_260px]">
@@ -52,6 +56,18 @@ export function TemplatesEditor({ templates, variables }: { templates: T[]; vari
           <Field label="Texto do contrato" hint="Use {{clausulas}} onde as cláusulas específicas devem aparecer.">
             <Textarea className="min-h-80 font-mono text-xs" value={sel.body} onChange={(e) => setSel({ ...sel, body: e.target.value })} />
           </Field>
+          {OLD_DOC.test(sel.body) && (
+            <Notice tone="amber" title="Contrato de cliente estrangeiro">
+              <p>
+                Para clientes estrangeiros, troque &quot;CPF/CNPJ {"{{cliente.documento}}"}&quot; por &quot;{"{{cliente.identificacao}}"}&quot;: o contrato mostra CPF, CNPJ, passaporte ou
+                RNE conforme o cadastro.
+              </p>
+              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setSel({ ...sel, body: sel.body.replace(OLD_DOC_ALL, "{{cliente.identificacao}}") })}>
+                Trocar no texto
+              </Button>
+              <p className="mt-1 text-xs">Depois de trocar, clique em Salvar modelo.</p>
+            </Notice>
+          )}
           <Field label="Cláusulas específicas do produto (cancelamento, alteração, reembolso)">
             <Textarea className="min-h-40 font-mono text-xs" value={sel.clauses} onChange={(e) => setSel({ ...sel, clauses: e.target.value })} />
           </Field>

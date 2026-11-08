@@ -11,7 +11,15 @@ import { Notice } from "@/components/ui";
 import { formatBRL } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { formatDocument, maskPassport } from "@/lib/utils";
-import { PRODUCT_TYPES } from "@/lib/constants";
+import { GENDERS, PRODUCT_TYPES } from "@/lib/constants";
+import { clientDocHint } from "@/lib/client-identity";
+
+/** Idade em anos completos na data de hoje (datas ISO aaaa-mm-dd). */
+function ageOn(birth: string, todayIso: string): number {
+  const [by, bm, bd] = birth.split("-").map(Number);
+  const [ty, tm, td] = todayIso.split("-").map(Number);
+  return ty - by - (tm < bm || (tm === bm && td < bd) ? 1 : 0);
+}
 import type { Params } from "@/lib/params";
 import { ArchiveClientButton, EditClientButton } from "../client-buttons";
 
@@ -23,6 +31,8 @@ export default async function ClientPage({ params }: { params: Params }) {
   const { client: c, sales, receivables, contracts, stats, trips, asPassenger, passportAlert } = await orNotFound(getClient(ctx, id));
   const address = [c.street && `${c.street}${c.number ? `, ${c.number}` : ""}`, c.complement, c.district, c.city && `${c.city}${c.state ? `/${c.state}` : ""}`, c.zipCode].filter(Boolean).join(" · ");
   const canManage = can(ctx, "clients.manage");
+  const t = today(ctx);
+  const pf = c.personType !== "PJ";
 
   return (
     <>
@@ -30,10 +40,11 @@ export default async function ClientPage({ params }: { params: Params }) {
         back={{ href: "/clientes", label: "Clientes" }}
         title={
           <span className="flex items-center gap-2">
-            {c.name} {c.personType === "PJ" && <Badge tone="violet">Pessoa jurídica</Badge>} {c.archivedAt && <Badge>Arquivado</Badge>}
+            {c.name} {c.personType === "PJ" && <Badge tone="violet">Pessoa jurídica</Badge>}{" "}
+            {c.foreigner && <Badge tone="blue">{c.nationality ? `Estrangeiro · ${c.nationality}` : "Estrangeiro"}</Badge>} {c.archivedAt && <Badge>Arquivado</Badge>}
           </span>
         }
-        description={[c.document && formatDocument(c.document), c.whatsapp ?? c.phone, c.email].filter(Boolean).join(" · ") || "Contato não informado"}
+        description={[clientDocHint(c), c.whatsapp ?? c.phone, c.email].filter(Boolean).join(" · ") || "Contato não informado"}
         actions={
           <>
             {canManage && <ArchiveClientButton id={c.id} archived={!!c.archivedAt} />}
@@ -196,31 +207,47 @@ export default async function ClientPage({ params }: { params: Params }) {
                 <dt className="text-xs text-muted">Endereço</dt>
                 <dd>{address || "—"}</dd>
               </div>
-              <div>
-                <dt className="text-xs text-muted">Nascimento</dt>
-                <dd>{formatDate(c.birthDate)}</dd>
-              </div>
-              {(c.rg || c.passportNumber || c.specialNeeds) && (
-                <div>
-                  <dt className="flex items-center gap-1 text-xs text-muted">
-                    <IdCard className="h-3.5 w-3.5" /> Documentos de viagem
-                  </dt>
-                  <dd className="space-y-0.5">
-                    {c.rg && <p>RG ••••{c.rg.slice(-3)}</p>}
-                    {c.passportNumber && (
-                      <p>
-                        Passaporte {maskPassport(c.passportNumber)}
-                        {c.passportExpiry && ` · val. ${formatDate(c.passportExpiry)}`}
-                      </p>
-                    )}
-                    {c.specialNeeds && (
-                      <p className="flex items-center gap-1 text-amber-800">
-                        <AlertTriangle className="h-3.5 w-3.5" /> {c.specialNeeds}
-                      </p>
-                    )}
-                  </dd>
-                </div>
+              {pf && (
+                <>
+                  <div>
+                    <dt className="text-xs text-muted">Nascimento</dt>
+                    <dd>{c.birthDate ? `${formatDate(c.birthDate)} (${ageOn(c.birthDate, t)} anos)` : "Não informado"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted">Sexo</dt>
+                    <dd>{c.gender ? GENDERS.label(c.gender) : "Não informado"}</dd>
+                  </div>
+                  {c.foreigner && (
+                    <div>
+                      <dt className="text-xs text-muted">Nacionalidade</dt>
+                      <dd>{c.nationality || "Não informado"}</dd>
+                    </div>
+                  )}
+                </>
               )}
+              <div>
+                <dt className="flex items-center gap-1 text-xs text-muted">
+                  <IdCard className="h-3.5 w-3.5" /> Documentos
+                </dt>
+                <dd className="space-y-0.5">
+                  <p>
+                    {pf ? "CPF" : "CNPJ"}: {c.document ? formatDocument(c.document) : "Não informado"}
+                  </p>
+                  {pf && <p>RG: {c.rg ? `••••${c.rg.slice(-3)}` : "Não informado"}</p>}
+                  {pf && (
+                    <p>
+                      Passaporte: {c.passportNumber ? maskPassport(c.passportNumber) : "Não informado"}
+                      {c.passportNumber && c.passportExpiry && ` · val. ${formatDate(c.passportExpiry)}`}
+                    </p>
+                  )}
+                  {pf && (c.foreigner || c.rne) && <p>RNE/RNM: {c.rne ? maskPassport(c.rne) : "Não informado"}</p>}
+                  {c.specialNeeds && (
+                    <p className="flex items-center gap-1 text-amber-800">
+                      <AlertTriangle className="h-3.5 w-3.5" /> {c.specialNeeds}
+                    </p>
+                  )}
+                </dd>
+              </div>
               {c.tradeName && (
                 <div>
                   <dt className="text-xs text-muted">Nome fantasia</dt>
@@ -265,8 +292,10 @@ export default async function ClientPage({ params }: { params: Params }) {
                 <li key={ct.id} className="flex items-center justify-between px-5 py-3 text-sm">
                   {can(ctx, "contracts.manage") ? (
                     <Link href={`/contratos/${ct.id}`} className="hover:text-brand-700">
-                      {ct.sale.code}
+                      {ct.trip ? `Viagem ${ct.trip.code}` : ct.sale.code}
                     </Link>
+                  ) : ct.trip ? (
+                    `Viagem ${ct.trip.code}`
                   ) : (
                     ct.sale.code
                   )}

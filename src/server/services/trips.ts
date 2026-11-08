@@ -10,6 +10,7 @@ import { audit } from "../audit";
 import { tripSchema } from "./schemas";
 import { saleScope, saleFinancialStatus } from "./sales";
 import { textContains } from "./query";
+import { prepareContractForSale, syncTripContract, contractNeverSent, tripContractCovers } from "./contracts";
 import { sum } from "@/lib/money";
 
 export function tripScope(ctx: Ctx): Prisma.TripWhereInput {
@@ -76,8 +77,9 @@ export async function getTrip(ctx: Ctx, id: string) {
   const trip = await prisma.trip.findFirst({
     where: { id, ...tripScope(ctx) },
     include: {
-      client: { select: { id: true, name: true, document: true, whatsapp: true, phone: true, email: true } },
+      client: { select: { id: true, name: true, document: true, foreigner: true, passportNumber: true, rne: true, nationality: true, whatsapp: true, phone: true, email: true } },
       attachments: { orderBy: { createdAt: "desc" } },
+      contracts: { select: { id: true, status: true, outdated: true, version: true, saleIdsJson: true, saleId: true, externalId: true } },
       sales: {
         where: saleScope(ctx),
         orderBy: { saleDate: "asc" },
@@ -86,7 +88,7 @@ export async function getTrip(ctx: Ctx, id: string) {
           items: { include: { supplier: { select: { id: true, name: true } }, operator: { select: { id: true, name: true } }, reservation: true }, orderBy: { sortOrder: "asc" } },
           passengers: true,
           receivables: { where: { origin: "VENDA" }, select: { amountCents: true, settledCents: true, status: true, dueDate: true } },
-          contracts: { select: { id: true, status: true } },
+          contracts: { select: { id: true, status: true, tripId: true, externalId: true } },
           attachments: { orderBy: { createdAt: "desc" } },
         },
       },
@@ -99,6 +101,25 @@ export async function getTrip(ctx: Ctx, id: string) {
   // passageiros sem repetição (mesma pessoa em várias vendas)
   const seen = new Map<string, (typeof trip.sales)[number]["passengers"][number]>();
   for (const s of active) for (const p of s.passengers) seen.set((p.document || p.name).toLowerCase(), p);
+  // contrato da viagem: vendas no texto, vendas de fora (já tinham contrato enviado) e se dá para gerar
+  const tripContract = trip.contracts[0] ?? null;
+  const confirmedSales = await prisma.sale.findMany({
+    where: { companyId: ctx.companyId, tripId: trip.id, status: { in: ["CONFIRMADA", "CONCLUIDA"] } },
+    select: { id: true, code: true, contracts: { select: { id: true, status: true, externalId: true, sentAt: true } } },
+    orderBy: [{ saleDate: "asc" }, { createdAt: "asc" }],
+  });
+  const own = (s: (typeof confirmedSales)[number]) => s.contracts.filter((c) => c.id !== tripContract?.id);
+  // contrato da viagem cancelado não cobre ninguém; enviado/assinado cobre só as vendas do texto (igual à página da venda)
+  const coveredSaleIds = tripContract ? confirmedSales.filter((s) => own(s).length === 0 && tripContractCovers(tripContract, s.id)).map((s) => s.id) : [];
+  const tripContractInfo = tripContract
+    ? {
+        ...tripContract,
+        includedCodes: confirmedSales.filter((s) => (JSON.parse(tripContract.saleIdsJson) as string[]).includes(s.id)).map((s) => s.code),
+        outsideCodes: confirmedSales.filter((s) => own(s).length > 0).map((s) => s.code),
+      }
+    : null;
+  const joinable = confirmedSales.filter((s) => s.contracts.every(contractNeverSent));
+  const canGenerateTripContract = !tripContract && !trip.cancelledAt && joinable.length >= 2;
   const received = sum(active.flatMap((s) => s.receivables.filter((r) => r.status !== "CANCELADO").map((r) => r.settledCents)));
   const toReceive = sum(active.flatMap((s) => s.receivables.filter((r) => r.status !== "CANCELADO").map((r) => r.amountCents)));
   return {
@@ -115,6 +136,12 @@ export async function getTrip(ctx: Ctx, id: string) {
     },
     documents: [...trip.attachments.map((a) => ({ ...a, origin: "Viagem" })), ...trip.sales.flatMap((s) => s.attachments.map((a) => ({ ...a, origin: s.code })))],
     showMargin,
+    tripContract: tripContractInfo,
+    coveredSaleIds,
+    /** cobertas pelo contrato da viagem, mas incluídas depois da emissão (ainda fora do texto) */
+    pendingSaleIds: tripContract ? coveredSaleIds.filter((id) => !(JSON.parse(tripContract.saleIdsJson) as string[]).includes(id)) : [],
+    canGenerateTripContract,
+    joinableSaleCodes: joinable.map((s) => s.code),
   };
 }
 
@@ -174,6 +201,11 @@ export async function linkSaleToTrip(ctx: Ctx, tripId: string | null, saleId: st
       if (trip.clientId !== sale.clientId) throw new AppError("A venda é de outro cliente.");
     }
     await tx.sale.update({ where: { id: saleId }, data: { tripId } });
+    // contrato: a venda confirmada entra no contrato da viagem (se ainda não foi enviado) e sai do da viagem antiga
+    const oldTripId = sale.tripId;
+    const confirmed = sale.status === "CONFIRMADA" || sale.status === "CONCLUIDA";
+    if (oldTripId && oldTripId !== tripId) await syncTripContract(tx, ctx.companyId, oldTripId, { ctx });
+    if (confirmed && oldTripId !== tripId) await prepareContractForSale(tx, ctx.companyId, saleId, { ctx });
     await audit(tx, ctx, tripId ? "viagem.venda_vinculada" : "viagem.venda_desvinculada", "Sale", saleId, { tripId: tripId ?? sale.tripId });
   });
 }

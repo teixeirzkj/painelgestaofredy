@@ -1,17 +1,18 @@
 "use client";
 import { useState } from "react";
-import { RefreshCw, FileCheck2, Printer, Ban, RotateCcw, Send, Link2, SearchCheck } from "lucide-react";
+import { RefreshCw, FileCheck2, Printer, Ban, RotateCcw, Send, Link2, SearchCheck, Split } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui";
 import { ConfirmDialog, Modal } from "@/components/ui/client";
 import { useAction } from "@/components/use-action";
-import { cancelContractAction, checkContractSignatureAction, issueContractAction, refreshContractAction, reopenContractAction, sendContractToSignatureAction } from "@/app/actions";
+import { cancelContractAction, checkContractSignatureAction, issueContractAction, refreshContractAction, reopenContractAction, sendContractToSignatureAction, splitTripContractAction } from "@/app/actions";
 
 type Signature = { enabled: boolean; provider: string | null; signUrl: string | null; cost: string; clientEmail: string | null; clientPhone: string | null };
 
-export function ContractActions({ id, status, canIssue, signature }: { id: string; status: string; canIssue: boolean; signature: Signature }) {
+export function ContractActions({ id, status, canIssue, canSplit = false, signature }: { id: string; status: string; canIssue: boolean; /** contrato da viagem ainda não enviado */ canSplit?: boolean; signature: Signature }) {
   const { run, busy } = useAction();
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmSplit, setConfirmSplit] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [opts, setOpts] = useState({ whatsapp: !signature.clientEmail, signAgency: true });
   const preparing = status === "EM_PREPARACAO" || status === "NAO_GERADO";
@@ -25,6 +26,11 @@ export function ContractActions({ id, status, canIssue, signature }: { id: strin
       {status === "CANCELADO" && (
         <Button variant="outline" loading={busy} onClick={() => run(() => reopenContractAction(id))}>
           <RotateCcw className="h-4 w-4" /> Reabrir (nova versão)
+        </Button>
+      )}
+      {canSplit && (
+        <Button variant="ghost" onClick={() => setConfirmSplit(true)}>
+          <Split className="h-4 w-4" /> Separar em contratos por venda
         </Button>
       )}
       {status !== "CANCELADO" && status !== "ASSINADO" && (
@@ -97,6 +103,17 @@ export function ContractActions({ id, status, canIssue, signature }: { id: strin
           <p className="text-xs text-muted">O contrato só passa para “Assinado” quando a ZapSign confirmar todas as assinaturas.</p>
         </div>
       </Modal>
+      <ConfirmDialog
+        open={confirmSplit}
+        onClose={() => setConfirmSplit(false)}
+        danger={false}
+        title="Separar em contratos por venda?"
+        description="O contrato da viagem vai virar um contrato para cada venda. Continuar?"
+        confirmLabel="Separar"
+        onConfirm={async () => {
+          await run(() => splitTripContractAction(id), { onSuccess: () => setConfirmSplit(false) });
+        }}
+      />
       <ConfirmDialog
         open={confirmCancel}
         onClose={() => setConfirmCancel(false)}

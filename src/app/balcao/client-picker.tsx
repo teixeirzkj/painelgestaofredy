@@ -8,7 +8,7 @@ import { searchClientsAction, startBalcaoFlowAction } from "@/app/actions";
 import { toast } from "sonner";
 import { formatDocument } from "@/lib/utils";
 
-type Found = { id: string; name: string; document: string | null; whatsapp: string | null; email: string | null; reason?: string };
+type Found = { id: string; name: string; document: string | null; docHint?: string | null; whatsapp: string | null; email: string | null; reason?: string };
 
 /** Etapa 1: achar o cliente (sugestões pelo contato do card, busca) ou cadastrar um novo. */
 export function ClientPicker({ card, canCreate, matches, prefill }: { card: string | null; canCreate: boolean; matches: Found[]; prefill: { name: string; email: string; whatsapp: string; document: string } }) {
@@ -38,7 +38,7 @@ export function ClientPicker({ card, canCreate, matches, prefill }: { card: stri
         <UserCheck className="h-4 w-4 shrink-0 text-brand-600" />
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium text-ink">{c.name}</span>
-          <span className="block truncate text-xs text-muted">{[c.document && formatDocument(c.document), c.whatsapp, c.email].filter(Boolean).join(" · ") || "sem documento"}</span>
+          <span className="block truncate text-xs text-muted">{[c.document ? formatDocument(c.document) : c.docHint, c.whatsapp, c.email].filter(Boolean).join(" · ") || "sem documento"}</span>
         </span>
         {c.reason && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">{c.reason}</span>}
         <span className="text-xs font-medium text-brand-700">Usar</span>
@@ -59,7 +59,7 @@ export function ClientPicker({ card, canCreate, matches, prefill }: { card: stri
         </Card>
       )}
       <Card>
-        <CardHeader title="Buscar cliente" description="Por nome, CPF ou telefone" icon={Search} />
+        <CardHeader title="Buscar cliente" description="Por nome, CPF, telefone ou passaporte" icon={Search} />
         <div className="px-5 pb-4">
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Digite para buscar…" aria-label="Buscar cliente" autoFocus={matches.length > 0} />
         </div>
