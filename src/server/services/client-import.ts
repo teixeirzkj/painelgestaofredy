@@ -5,7 +5,8 @@
  */
 import Papa from "papaparse";
 import { prisma, type Tx } from "../db";
-import { assertCan, type Ctx } from "../context";
+import { assertCan, can, type Ctx } from "../context";
+import { clientScope } from "./registry";
 import { AppError } from "../errors";
 import { audit } from "../audit";
 import { isValidDocument, onlyDigits } from "@/lib/utils";
@@ -109,7 +110,11 @@ export async function upsertImportedClient(tx: Tx, ctx: Ctx, input: ImportedClie
   ];
   // sem CPF nem e-mail: procura pelo nome exato (evita duplicar ao reimportar a mesma planilha)
   if (!or.length) or.push({ name: data.name, document: null } as never);
-  const existing = await tx.client.findFirst({ where: { companyId: ctx.companyId, OR: or }, orderBy: { createdAt: "asc" } });
+  const viewAll = can(ctx, "clients.view_all");
+  const existing = await tx.client.findFirst({ where: { AND: [viewAll ? { companyId: ctx.companyId } : clientScope(ctx), { OR: or }] }, orderBy: { createdAt: "asc" } });
+  // existe, mas é de outro vendedor: não altera nem cria duplicado
+  if (!existing && !viewAll && (await tx.client.findFirst({ where: { companyId: ctx.companyId, OR: or }, select: { id: true } })))
+    throw new AppError("cliente já cadastrado na agência por outro vendedor");
   const warning = invalidDocument ? "CPF/CNPJ inválido foi ignorado" : undefined;
   if (existing) {
     const patch: Record<string, unknown> = {};

@@ -149,6 +149,9 @@ describe("cadastro do cliente estrangeiro", () => {
   });
 
   it("passageiro ligado a cliente fora do escopo do vendedor fica ligado, mas sem copiar documentos", async () => {
+    // agência em que o vendedor só vê os próprios clientes
+    const env = await makeCompany("Escopo passageiro", { sellersSeeAllClients: false });
+    await prisma.client.update({ where: { id: env.client.id }, data: { ownerId: env.seller.userId } });
     const hidden = await prisma.client.create({
       data: { companyId: env.company.id, name: "Cliente do Outro", ownerId: env.seller2.userId, document: "11144477735", passportNumber: "HID12345", passportExpiry: "2030-01-01", rne: "V7654321", birthDate: "1970-02-02" },
     });

@@ -95,8 +95,11 @@ async function validateAgencyCards(tx: Tx, ctx: Ctx, input: SaleParsed, confirmi
   if (issues.length) throw new AppError(issues.some((x) => x.message.startsWith("Escolha um")) ? "Cartão da agência inválido." : issues[0].message, "VALIDATION", issues);
 }
 
-async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string, confirming = input.confirm, keptCardIds = new Set<string>()) {
-  const client = await tx.client.findFirst({ where: { id: input.clientId, companyId: ctx.companyId, archivedAt: null } });
+async function validateRefs(tx: Tx, ctx: Ctx, input: SaleParsed, saleId?: string, confirming = input.confirm, keptCardIds = new Set<string>(), integration = false) {
+  // vendedor sem "ver todos os clientes" só vende para cliente que já é dele: senão, criar uma venda daria acesso
+  // ao cadastro e aos documentos de um cliente de outro vendedor. Integrações (Frédy, API) ficam de fora.
+  const scope = integration ? { companyId: ctx.companyId } : clientScope(ctx);
+  const client = await tx.client.findFirst({ where: { AND: [{ id: input.clientId, archivedAt: null }, scope] } });
   if (!client) throw new AppError("Cliente não encontrado.", "VALIDATION", [{ field: "clientId", message: "Selecione um cliente válido." }]);
   await validateAgencyCards(tx, ctx, input, confirming, keptCardIds);
   const supplierIds = [...new Set([...input.items.flatMap((i) => [i.supplierId, i.operatorId]), input.intermediaryId].filter(Boolean))] as string[];
@@ -631,7 +634,7 @@ export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" 
   const totals = computeTotals(input);
 
   return prisma.$transaction(async (tx) => {
-    const { client, sellerId } = await validateRefs(tx, ctx, input);
+    const { client, sellerId } = await validateRefs(tx, ctx, input, undefined, input.confirm, undefined, !!meta);
     let warnings: string[] = [];
     const number = await nextNumber(tx, ctx.companyId);
     const code = `V-${input.saleDate.slice(0, 4)}-${String(number).padStart(4, "0")}`;

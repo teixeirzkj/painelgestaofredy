@@ -3,12 +3,19 @@
  * AES-256-GCM com chave derivada de INTEGRATIONS_KEY (se definida) ou AUTH_SECRET.
  * Trocar essa variável invalida os tokens salvos: a agência precisa colar o token de novo.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 function key() {
   const base = process.env.INTEGRATIONS_KEY || process.env.AUTH_SECRET;
   if (!base || base.length < 32) throw new Error("INTEGRATIONS_KEY/AUTH_SECRET ausente ou muito curto.");
   return createHash("sha256").update(`fredy-gestao:integracoes:${base}`).digest();
+}
+
+/** Compara segredos em tempo constante, sem erro quando os tamanhos (em bytes) são diferentes. */
+export function safeEqual(given: string | null | undefined, expected: string | null | undefined): boolean {
+  if (!given || !expected) return false;
+  const h = (v: string) => createHash("sha256").update(v, "utf8").digest();
+  return timingSafeEqual(h(given), h(expected));
 }
 
 export function encryptSecret(plain: string): string {

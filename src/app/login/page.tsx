@@ -2,12 +2,13 @@ import { redirect } from "next/navigation";
 import { Plane, ShieldCheck } from "lucide-react";
 import { getContext } from "@/server/auth";
 import { LoginForm } from "./login-form";
+import { safeNext } from "@/lib/safe-next";
 
 export const metadata = { title: "Entrar" };
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
-  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
+  const next = sp.next ? safeNext(sp.next, "") || undefined : undefined;
   const ctx = await getContext();
   if (ctx) {
     const dest = ctx.role === "ATENDENTE" && !(next ?? "").startsWith("/balcao") ? "/balcao" : (next ?? "/");

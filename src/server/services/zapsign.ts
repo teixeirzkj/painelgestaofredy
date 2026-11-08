@@ -7,7 +7,8 @@
  *   na API antes de marcar (o conteúdo do webhook não é aceito sozinho).
  * - O PDF assinado é baixado e anexado à venda.
  */
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { safeEqual } from "../secrets";
 import { z } from "zod";
 import { prisma } from "../db";
 import { assertCan, today, type Ctx } from "../context";
@@ -41,7 +42,7 @@ export function zapsignWebhookSecret() {
 }
 export function checkWebhookSecret(given: string | null) {
   const expected = zapsignWebhookSecret();
-  return !!given && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  return safeEqual(given, expected);
 }
 
 async function zs<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
@@ -225,6 +226,9 @@ export async function checkContractSignature(ctx: Ctx, contractId: string) {
 
 /** Uso por agência e mês (painel da plataforma: base para cobrança). */
 export async function signatureUsageByCompany(month: string) {
+  // só a equipe da plataforma vê o uso de todas as agências
+  const { requirePlatformAction } = await import("../platform");
+  await requirePlatformAction();
   const start = new Date(`${month}-01T00:00:00-03:00`);
   const end = new Date(start);
   end.setMonth(end.getMonth() + 1);

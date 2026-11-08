@@ -212,7 +212,7 @@ export async function changePassword(ctx: Ctx, raw: unknown) {
   if (!(await bcrypt.compare(d.current, u.passwordHash))) throw new AppError("Senha atual incorreta.", "VALIDATION", [{ field: "current", message: "Senha atual incorreta." }]);
   const hash = await bcrypt.hash(d.next, 10);
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: ctx.userId }, data: { passwordHash: hash } });
+    await tx.user.update({ where: { id: ctx.userId }, data: { passwordHash: hash, sessionVersion: { increment: 1 } } });
     await audit(tx, ctx, "conta.senha_alterada", "User", ctx.userId);
   });
 }

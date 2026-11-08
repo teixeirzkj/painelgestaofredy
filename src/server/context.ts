@@ -19,12 +19,14 @@ export type Ctx = {
   viaEmbed?: boolean;
 };
 
-export async function loadContext(userId: string): Promise<Ctx | null> {
+export async function loadContext(userId: string, sessionVersion?: number): Promise<Ctx | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: { company: { include: { rolePermissions: true } } },
   });
   if (!user || !user.active || !user.company.active) return null;
+  // sessão de antes de uma troca de senha/papel não vale mais
+  if (sessionVersion !== undefined && sessionVersion !== user.sessionVersion) return null;
   const role = user.role as Role;
   return {
     userId: user.id,

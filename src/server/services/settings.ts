@@ -91,7 +91,12 @@ export async function saveUser(ctx: Ctx, id: string | null, raw: unknown) {
         if (id === ctx.userId && (d.role !== "ADMIN" || !d.active)) throw new AppError("Você não pode remover seu próprio acesso de administrador.");
         await tx.user.update({
           where: { id },
-          data: { name: d.name, email: d.email, role: d.role, active: d.active, commissionRateBps: d.commissionRateBps, ...(d.password ? { passwordHash: await bcrypt.hash(d.password, 10) } : {}) },
+          data: {
+            name: d.name, email: d.email, role: d.role, active: d.active, commissionRateBps: d.commissionRateBps,
+            ...(d.password ? { passwordHash: await bcrypt.hash(d.password, 10) } : {}),
+            // nova senha, outro papel ou desativado: derruba as sessões abertas desse usuário
+            ...(d.password || d.role !== u.role || (u.active && !d.active) ? { sessionVersion: { increment: 1 } } : {}),
+          },
         });
         await audit(tx, ctx, "usuario.alterado", "User", id, { role: d.role, active: d.active });
         return id;

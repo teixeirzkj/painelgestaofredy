@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getCompanyDetail } from "@/server/platform";
+import { getCompanyDetail, requirePlatform } from "@/server/platform";
 import { Badge, Card, CardHeader, DataList, Notice, PageHeader, Table, Td, Th } from "@/components/ui";
 import { formatBRL } from "@/lib/money";
 import { formatDateTime } from "@/lib/dates";
@@ -19,6 +19,7 @@ const ACTION: Record<string, string> = {
 };
 
 export default async function CompanyPage({ params }: { params: Params }) {
+  await requirePlatform(); // a checagem do layout não basta: a página pode ser pedida sozinha
   const { id } = await params;
   const c = await getCompanyDetail(id).catch(() => null);
   if (!c) notFound();

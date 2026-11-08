@@ -14,6 +14,8 @@ import { prisma } from "@/server/db";
 import { headers } from "next/headers";
 import { createSession, destroySession, getContext, requireContext } from "@/server/auth";
 import * as admin from "@/server/services/admin";
+import { burnPasswordCheck, clientIp, loginBlocked } from "@/server/services/login-guard";
+import { safeNext } from "@/lib/safe-next";
 import { platformLogin, createPlatformSession } from "@/server/platform";
 import * as team from "@/server/services/team";
 import * as ops from "@/server/services/ops";
@@ -45,17 +47,18 @@ function act<T>(fn: (ctx: Awaited<ReturnType<typeof requireContext>>) => Promise
 }
 
 // ------------------------------ Autenticação ------------------------------
-const attempts = new Map<string, { n: number; until: number }>();
-
 export async function loginAction(_: unknown, form: FormData): Promise<{ error?: string }> {
-  const email = String(form.get("email") ?? "").trim().toLowerCase();
-  const password = String(form.get("password") ?? "");
-  const a = attempts.get(email);
-  if (a && a.until > Date.now()) return { error: "Muitas tentativas. Aguarde alguns minutos." };
-  const user = await prisma.user.findUnique({ where: { email }, include: { company: { select: { active: true } } } });
-  const ok = user && user.active && (await bcrypt.compare(password, user.passwordHash));
+  const email = String(form.get("email") ?? "").trim().toLowerCase().slice(0, 200);
+  const password = String(form.get("password") ?? "").slice(0, 200);
   const hdr = await headers();
-  const meta = { ip: hdr.get("x-forwarded-for")?.split(",")[0] ?? null, userAgent: hdr.get("user-agent") };
+  const meta = { ip: clientIp(hdr), userAgent: hdr.get("user-agent") };
+  if (!email || !password) return { error: "E-mail ou senha inválidos." };
+  // limite de tentativas guardado no banco (vale para todas as instâncias do servidor)
+  if (await loginBlocked(email, meta.ip)) return { error: "Muitas tentativas erradas. Aguarde 15 minutos e tente de novo." };
+  const user = await prisma.user.findUnique({ where: { email }, include: { company: { select: { active: true } } } });
+  // sempre roda o bcrypt (com conta, sem conta ou conta inativa): o tempo de resposta não revela quem existe
+  const passOk = user ? await bcrypt.compare(password, user.passwordHash) : (await burnPasswordCheck(password), false);
+  const ok = user && user.active && passOk;
   if (ok && !user.company.active) {
     await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "FALHA", ...meta });
     return { error: "A conta desta agência está suspensa. Fale com o suporte Frédy." };
@@ -64,24 +67,20 @@ export async function loginAction(_: unknown, form: FormData): Promise<{ error?:
     // Login da equipe da plataforma digitado na tela das agências: leva direto ao painel da plataforma.
     const pu = await platformLogin(email, password);
     if (pu) {
-      attempts.delete(email);
       await createPlatformSession(pu.id);
       redirect("/plataforma");
     }
   }
   if (!ok) {
     await admin.logAccess({ companyId: user?.companyId ?? null, userId: user?.id ?? null, email, type: "FALHA", ...meta });
-    const n = (a?.n ?? 0) + 1;
-    attempts.set(email, { n, until: n >= 5 ? Date.now() + 5 * 60_000 : 0 });
     return { error: "E-mail ou senha inválidos." };
   }
-  attempts.delete(email);
   const next = String(form.get("next") ?? "");
   // entrando pela venda rápida (popup, inclusive embutido no WTS): guarda também o login de longa duração do popup
   await createSession(user.id, { embedded: next.startsWith("/balcao") || user.role === "ATENDENTE" });
   await admin.logAccess({ companyId: user.companyId, userId: user.id, email, type: "LOGIN", ...meta });
   // só caminhos internos (evita redirecionar para outro site)
-  const safe = next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+  const safe = safeNext(next);
   // atendente só usa a venda rápida
   redirect(user.role === "ATENDENTE" && !safe.startsWith("/balcao") ? "/balcao" : safe);
 }
@@ -118,8 +117,9 @@ export const cancelSaleAction = async (id: string, reason: string, opts?: { reve
 export const duplicateSaleAction = async (id: string) => act((ctx) => sales.duplicateSale(ctx, id), "Venda duplicada como rascunho.");
 export const updateReservationAction = async (id: string, data: { status: string; locator: string | null; notes: string | null }) =>
   act(async (ctx) => {
-    const r = await prisma.reservation.findFirst({ where: { id, companyId: ctx.companyId, sale: sales.saleScope(ctx) } });
+    const r = await prisma.reservation.findFirst({ where: { id, companyId: ctx.companyId, sale: sales.saleScope(ctx) }, include: { sale: { select: { sellerId: true } } } });
     if (!r) throw new AppError("Reserva não encontrada.");
+    if (r.sale.sellerId !== ctx.userId && !ctx.permissions.has("sales.edit_all")) throw new AppError("Só o vendedor da venda ou quem edita todas as vendas pode mudar a reserva.", "FORBIDDEN");
     if (!["PENDENTE", "CONFIRMADA", "CANCELADA"].includes(data.status)) throw new AppError("Status inválido.");
     await prisma.reservation.update({ where: { id }, data: { status: data.status, locator: data.locator?.slice(0, 60) || null, notes: data.notes?.slice(0, 1000) || null } });
   }, "Reserva atualizada.");
@@ -242,7 +242,12 @@ export const saveExpenseCategoryAction = async (id: string | null, input: unknow
 export const saveCardFeeAction = async (id: string | null, input: unknown) => act((ctx) => admin.saveCardFee(ctx, id, input), "Taxa salva.");
 export const updateCompanyProfileAction = async (input: unknown) => act((ctx) => admin.updateCompanyProfile(ctx, input), "Dados da agência salvos.");
 export const updateMeAction = async (input: unknown) => act((ctx) => admin.updateMe(ctx, input), "Dados atualizados.");
-export const changePasswordAction = async (input: unknown) => act((ctx) => admin.changePassword(ctx, input), "Senha alterada.");
+export const changePasswordAction = async (input: unknown) =>
+  act(async (ctx) => {
+    await admin.changePassword(ctx, input);
+    // a troca de senha derruba as outras sessões; esta continua com um login novo
+    await createSession(ctx.userId, { embedded: !!ctx.viaEmbed });
+  }, "Senha alterada. As outras sessões abertas foram encerradas.");
 
 // ------------------------------ Integração Frédy CRM ------------------------------
 export const connectFredyAction = async (token: string) => act((ctx) => fredy.connectFredy(ctx, token), "Frédy conectado.");

@@ -102,6 +102,8 @@ model User {
   birthDate         String?
   phone             String?
   lastLoginAt       DateTime?
+  /// sobe a cada troca de senha, de papel ou desativação: derruba as sessões abertas em outros aparelhos
+  sessionVersion    Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -917,6 +919,8 @@ model AccessLog {
   createdAt DateTime @default(now())
 
   @@index([companyId, createdAt])
+  @@index([email, type, createdAt])
+  @@index([ip, type, createdAt])
 }
 
 /// Equipe da plataforma (Frédy): administra as contas das agências. Login separado em /plataforma.

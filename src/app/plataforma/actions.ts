@@ -2,22 +2,25 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { toResult } from "@/server/errors";
+import { headers } from "next/headers";
 import * as platform from "@/server/platform";
-
-const attempts = new Map<string, { n: number; until: number }>();
+import { clientIp, loginBlocked } from "@/server/services/login-guard";
+import { logAccess } from "@/server/services/admin";
 
 export async function platformLoginAction(_: unknown, form: FormData): Promise<{ error?: string }> {
-  const email = String(form.get("email") ?? "").trim().toLowerCase();
-  const password = String(form.get("password") ?? "");
-  const a = attempts.get(email);
-  if (a && a.until > Date.now()) return { error: "Muitas tentativas. Aguarde alguns minutos." };
+  const email = String(form.get("email") ?? "").trim().toLowerCase().slice(0, 200);
+  const password = String(form.get("password") ?? "").slice(0, 200);
+  const hdr = await headers();
+  const ip = clientIp(hdr);
+  const tag = "plataforma:" + email; // tentativas da plataforma contadas à parte
+  if (!email || !password) return { error: "E-mail ou senha inválidos." };
+  if (await loginBlocked(tag, ip)) return { error: "Muitas tentativas erradas. Aguarde 15 minutos e tente de novo." };
   const u = await platform.platformLogin(email, password);
   if (!u) {
-    const n = (a?.n ?? 0) + 1;
-    attempts.set(email, { n, until: n >= 5 ? Date.now() + 10 * 60_000 : 0 });
+    await logAccess({ email: tag, type: "FALHA", ip, userAgent: hdr.get("user-agent") });
     return { error: "E-mail ou senha inválidos." };
   }
-  attempts.delete(email);
+  await logAccess({ email: tag, type: "LOGIN", ip, userAgent: hdr.get("user-agent") });
   await platform.createPlatformSession(u.id);
   redirect("/plataforma");
 }

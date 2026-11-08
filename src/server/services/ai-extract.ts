@@ -6,7 +6,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod/v4";
-import { prisma } from "../db";
+import { prisma, Prisma } from "../db";
+import { clientScope } from "./registry";
 import { assertCan, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { PRODUCT_TYPES } from "@/lib/constants";
@@ -124,10 +125,12 @@ export async function extractSaleFromFile(ctx: Ctx, file: { bytes: Buffer; mimeT
   const doc = onlyDigits(parsed.client.document ?? "");
   const email = parsed.client.email?.trim().toLowerCase() || null;
   const select = { id: true, name: true, document: true, whatsapp: true } as const;
+  // só clientes que este usuário pode ver (vendedor sem "ver todos" não descobre cliente de outro vendedor)
+  const scoped = (w: Prisma.ClientWhereInput) => prisma.client.findFirst({ where: { AND: [clientScope(ctx), { archivedAt: null }, w] }, select });
   const match =
-    (doc.length === 11 || doc.length === 14 ? await prisma.client.findFirst({ where: { companyId: ctx.companyId, document: doc, archivedAt: null }, select }) : null) ??
-    (email ? await prisma.client.findFirst({ where: { companyId: ctx.companyId, email, archivedAt: null }, select }) : null) ??
-    (parsed.client.name ? await prisma.client.findFirst({ where: { companyId: ctx.companyId, name: parsed.client.name.trim(), archivedAt: null }, select }) : null);
+    (doc.length === 11 || doc.length === 14 ? await scoped({ document: doc }) : null) ??
+    (email ? await scoped({ email }) : null) ??
+    (parsed.client.name ? await scoped({ name: parsed.client.name.trim() }) : null);
 
   // Fornecedor pelo nome (contém / está contido), sem criar cadastro novo.
   const suppliers = await prisma.supplier.findMany({ where: { companyId: ctx.companyId, archivedAt: null }, select: { id: true, name: true } });

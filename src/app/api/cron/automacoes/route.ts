@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
+import { safeEqual } from "@/server/secrets";
 import { prisma } from "@/server/db";
 import { runScheduledAutomations } from "@/server/services/automations";
 
@@ -12,7 +12,7 @@ import { runScheduledAutomations } from "@/server/services/automations";
 async function run(req: Request) {
   const secret = process.env.CRON_SECRET ?? "";
   const given = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!secret || given.length !== secret.length || !timingSafeEqual(Buffer.from(given), Buffer.from(secret))) {
+  if (!secret || !safeEqual(given, secret)) {
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
   const companies = await prisma.company.findMany({ where: { active: true }, select: { id: true } });

@@ -298,7 +298,7 @@ export async function personalCalendar(ctx: Ctx, month: string) {
     prisma.task.findMany({ where: { ...taskScope(ctx), dueDate: { gte: from, lte: to }, status: { not: "CANCELADA" } }, select: { id: true, title: true, dueDate: true, status: true } }),
     prisma.sale.findMany({ where: { ...saleScope(ctx), status: confirmed, tripStart: { gte: from, lte: to } }, select: { id: true, code: true, destination: true, tripStart: true, client: { select: { name: true } } } }),
     birthdays(ctx, month, "todos"),
-    prisma.clientCredit.findMany({ where: { companyId: ctx.companyId, status: "ABERTO", expiresAt: { gte: from, lte: to } }, select: { id: true, expiresAt: true, amountCents: true, client: { select: { name: true } } } }),
+    prisma.clientCredit.findMany({ where: { companyId: ctx.companyId, status: "ABERTO", expiresAt: { gte: from, lte: to }, client: clientScope(ctx) }, select: { id: true, expiresAt: true, amountCents: true, client: { select: { name: true } } } }),
   ]);
   type Ev = { date: string; kind: "Tarefa" | "Embarque" | "Aniversário" | "Crédito"; title: string; href: string | null; done?: boolean };
   const events: Ev[] = [

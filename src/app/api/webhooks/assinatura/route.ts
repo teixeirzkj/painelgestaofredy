@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { safeEqual } from "@/server/secrets";
 import { z } from "zod";
 import { applySignatureCallback } from "@/server/services/contracts";
 import { AppError } from "@/server/errors";
@@ -27,7 +28,7 @@ export async function POST(req: Request) {
   const body = await req.text();
   const expected = createHmac("sha256", secret).update(body).digest("hex");
   const given = req.headers.get("x-signature") ?? "";
-  if (given.length !== expected.length || !timingSafeEqual(Buffer.from(given), Buffer.from(expected))) {
+  if (!safeEqual(given, expected)) {
     return NextResponse.json({ error: "Assinatura inválida." }, { status: 401 });
   }
   try {

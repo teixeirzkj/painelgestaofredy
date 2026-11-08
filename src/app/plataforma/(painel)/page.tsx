@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Building2, CircleCheck, CirclePause, Users } from "lucide-react";
-import { listCompanies, platformOverview } from "@/server/platform";
+import { listCompanies, platformOverview, requirePlatform } from "@/server/platform";
 import { signatureUsageByCompany } from "@/server/services/zapsign";
 import { formatBRL } from "@/lib/money";
 import { Badge, Card, EmptyState, KpiCard, PageHeader, Table, Td, Th } from "@/components/ui";
@@ -12,6 +12,7 @@ import { NewCompanyButton } from "./platform-client";
 export const metadata = { title: "Plataforma · Agências" };
 
 export default async function PlatformHome({ searchParams }: { searchParams: SearchParams }) {
+  await requirePlatform(); // a checagem do layout não basta: a página pode ser pedida sozinha
   const sp = await searchParams;
   const month = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).format(new Date()).slice(0, 7);
   const [o, companies, usage] = await Promise.all([platformOverview(), listCompanies(str(sp, "q")), signatureUsageByCompany(month)]);

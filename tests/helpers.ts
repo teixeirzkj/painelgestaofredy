@@ -2,8 +2,14 @@ import { prisma } from "@/server/db";
 import { loadContext, type Ctx } from "@/server/context";
 import { newKey } from "@/lib/utils";
 
-export async function makeCompany(name = "Agência Teste") {
+/**
+ * Agência de teste. Por padrão o vendedor tem a opção "Vendedor vê todos os clientes" (configurável na agência),
+ * para os testes de venda usarem o cliente compartilhado. Testes de isolamento entre vendedores passam
+ * { sellersSeeAllClients: false }.
+ */
+export async function makeCompany(name = "Agência Teste", opts: { sellersSeeAllClients?: boolean } = {}) {
   const company = await prisma.company.create({ data: { name, timezone: "America/Sao_Paulo" } });
+  if (opts.sellersSeeAllClients !== false) await prisma.rolePermission.create({ data: { companyId: company.id, role: "VENDEDOR", permission: "clients.view_all", allowed: true } });
   const mk = (role: string, n: string) =>
     prisma.user.create({ data: { companyId: company.id, name: n, email: `${n.toLowerCase()}-${newKey()}@teste.com`, passwordHash: "x", role } });
   const admin = await mk("ADMIN", "Admin");

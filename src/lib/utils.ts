@@ -64,8 +64,11 @@ export function newKey(): string {
 }
 
 export function csvEscape(v: unknown): string {
-  const s = v === null || v === undefined ? "" : String(v);
-  return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = v === null || v === undefined ? "" : String(v);
+  // texto que começa com = + - @ vira fórmula no Excel (injeção de fórmula): prefixa com apóstrofo.
+  // números (inclusive negativos) continuam números.
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+([.,]\d+)?$/.test(s)) s = "'" + s;
+  return /[";\n\r']/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function toCSV(headers: string[], rows: unknown[][]): string {

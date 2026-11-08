@@ -12,6 +12,7 @@ import { saleScope, saleFinancialStatus } from "./sales";
 import { textContains } from "./query";
 import { prepareContractForSale, syncTripContract, contractNeverSent, tripContractCovers } from "./contracts";
 import { sum } from "@/lib/money";
+import { clientScope } from "./registry";
 
 export function tripScope(ctx: Ctx): Prisma.TripWhereInput {
   if (can(ctx, "sales.view_all")) return { companyId: ctx.companyId };
@@ -174,6 +175,8 @@ export async function updateTrip(ctx: Ctx, id: string, raw: unknown) {
     const trip = await tx.trip.findFirst({ where: { id, ...tripScope(ctx) }, include: { sales: { select: { id: true } } } });
     if (!trip) throw new AppError("Viagem não encontrada.", "NOT_FOUND");
     if (d.clientId !== trip.clientId && trip.sales.length) throw new AppError("Não é possível trocar o cliente de uma viagem com vendas vinculadas.");
+    if (d.clientId !== trip.clientId && !(await tx.client.findFirst({ where: { AND: [{ id: d.clientId, archivedAt: null }, clientScope(ctx)] }, select: { id: true } })))
+      throw new AppError("Cliente não encontrado.", "NOT_FOUND");
     await tx.trip.update({ where: { id }, data: { title: d.title, destination: d.destination, notes: d.notes, clientId: d.clientId } });
     await audit(tx, ctx, "viagem.alterada", "Trip", id, d);
   });
@@ -213,7 +216,7 @@ export async function linkSaleToTrip(ctx: Ctx, tripId: string | null, saleId: st
 /** Viagens do cliente (para vincular no formulário de venda) e vendas dele ainda sem viagem. */
 export async function tripOptionsForClient(ctx: Ctx, clientId: string) {
   const [trips, looseSales] = await Promise.all([
-    prisma.trip.findMany({ where: { companyId: ctx.companyId, clientId, cancelledAt: null }, select: { id: true, code: true, title: true }, orderBy: { createdAt: "desc" } }),
+    prisma.trip.findMany({ where: { ...tripScope(ctx), clientId, cancelledAt: null }, select: { id: true, code: true, title: true }, orderBy: { createdAt: "desc" } }),
     prisma.sale.findMany({
       where: { ...saleScope(ctx), clientId, tripId: null, status: { not: "CANCELADA" } },
       select: { id: true, code: true, destination: true, saleDate: true, grossCents: true },

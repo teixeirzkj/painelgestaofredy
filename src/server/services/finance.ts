@@ -893,7 +893,7 @@ export async function registerAttachment(
       ? CLIENT_DOC_KINDS.values.includes(file.kind as never) ? file.kind! : "OUTRO_DOC"
       : file.kind && ATTACHMENT_KINDS.values.includes(file.kind as never) && !CLIENT_DOC_KINDS.values.includes(file.kind as never) ? file.kind : target.kind === "invoice" ? "FATURA" : target.kind === "sale" || target.kind === "trip" ? "DOCUMENTO" : "COMPROVANTE";
   const docNumber = target.kind === "client" ? file.docNumber?.trim().slice(0, 40) || null : null;
-  const docExpiry = target.kind === "client" && file.docExpiry && /^d{4}-d{2}-d{2}$/.test(file.docExpiry) ? file.docExpiry : null;
+  const docExpiry = target.kind === "client" && file.docExpiry && /^\d{4}-\d{2}-\d{2}$/.test(file.docExpiry) ? file.docExpiry : null;
   return prisma.$transaction(async (tx) => {
     const a = await tx.attachment.create({
       data: {

@@ -119,6 +119,7 @@ export async function matchStatementLine(ctx: Ctx, lineId: string, settlementId:
 
 export async function setStatementLineStatus(ctx: Ctx, lineId: string, status: "IGNORADO" | "PENDENTE") {
   assertCan(ctx, "finance.manage");
+  if (status !== "IGNORADO" && status !== "PENDENTE") throw new AppError("Status inválido.");
   const line = await prisma.bankStatementLine.findFirst({ where: { id: lineId, companyId: ctx.companyId } });
   if (!line) throw new AppError("Linha não encontrada.", "NOT_FOUND");
   await prisma.bankStatementLine.update({ where: { id: lineId }, data: { status, settlementId: null } });

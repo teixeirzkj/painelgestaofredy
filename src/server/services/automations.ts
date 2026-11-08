@@ -5,6 +5,7 @@ import { addDays, diffDays } from "@/lib/dates";
 import { audit } from "../audit";
 import { AppError } from "../errors";
 import { deliverToFredy, hasActiveFredy } from "./fredy";
+import { assertPublicHttpsUrl } from "../net-guard";
 
 /**
  * Automações prontas. Cada automação pode ser ativada/desativada pela agência.
@@ -189,7 +190,9 @@ export class WebhookAdapter implements EventDeliveryAdapter {
   }
   async deliver(event: { id: string; type: string; payloadJson: string }) {
     const signature = this.secret ? createHmac("sha256", this.secret).update(event.payloadJson).digest("hex") : "";
+    await assertPublicHttpsUrl(this.url!); // nada de rede interna (SSRF)
     const res = await fetch(this.url!, {
+      redirect: "manual",
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -200,6 +203,7 @@ export class WebhookAdapter implements EventDeliveryAdapter {
       body: event.payloadJson,
       signal: AbortSignal.timeout(10000),
     });
+    if (res.status >= 300 && res.status < 400) throw new AppError("O endereço respondeu com redirecionamento: use a URL final do webhook.");
     if (!res.ok) throw new AppError(`HTTP ${res.status}`);
   }
 }

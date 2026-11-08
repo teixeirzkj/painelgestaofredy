@@ -12,6 +12,7 @@ import { z } from "zod";
 import { prisma } from "./db";
 import { AppError } from "./errors";
 import { ensureExpenseCategories } from "./services/admin";
+import { burnPasswordCheck } from "./services/login-guard";
 
 const COOKIE = "fg_platform";
 const MAX_AGE = 60 * 60 * 8;
@@ -65,6 +66,7 @@ async function platformAudit(p: PlatformCtx, action: string, companyId: string |
 // ------------------------------ Contas das agências ------------------------------
 
 export async function listCompanies(q?: string) {
+  await requirePlatformAction();
   const rows = await prisma.company.findMany({
     where: q ? { OR: [{ name: { contains: q } }, { document: { contains: q.replace(/\D/g, "") || q } }] } : {},
     orderBy: { createdAt: "desc" },
@@ -79,6 +81,7 @@ export async function listCompanies(q?: string) {
 }
 
 export async function getCompanyDetail(id: string) {
+  await requirePlatformAction();
   const c = await prisma.company.findUnique({
     where: { id },
     include: {
@@ -149,7 +152,7 @@ export async function resetUserPassword(p: PlatformCtx, companyId: string, userI
   password.parse(newPassword);
   const u = await prisma.user.findFirst({ where: { id: userId, companyId } });
   if (!u) throw new AppError("Usuário não encontrado.", "NOT_FOUND");
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 10), active: true } });
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 10), active: true, sessionVersion: { increment: 1 } } });
   await platformAudit(p, "usuario.senha_redefinida", companyId, { userId, email: u.email });
 }
 
@@ -175,25 +178,24 @@ async function bootstrapPlatformUser(email: string, pass: string) {
   const be = process.env.PLATFORM_BOOTSTRAP_EMAIL?.trim().toLowerCase();
   const bp = process.env.PLATFORM_BOOTSTRAP_PASSWORD?.trim();
   if (!be || !bp || bp.length < 10 || email !== be || pass.trim() !== bp) return;
-  const existing = await prisma.platformUser.findUnique({ where: { email: be } });
-  if (existing && existing.active && (await bcrypt.compare(pass, existing.passwordHash))) return;
-  const passwordHash = await bcrypt.hash(pass, 10);
-  await prisma.platformUser.upsert({
-    where: { email: be },
-    create: { name: "Administrador da plataforma", email: be, passwordHash },
-    update: { passwordHash, active: true },
-  });
+  // só cria o PRIMEIRO acesso: com qualquer usuário da plataforma já criado, as variáveis não fazem mais nada
+  // (antes elas redefiniam a senha a cada login, e esquecê-las na Vercel deixava uma porta aberta)
+  if ((await prisma.platformUser.count()) > 0) return;
+  await prisma.platformUser.create({ data: { name: "Administrador da plataforma", email: be, passwordHash: await bcrypt.hash(pass, 10) } });
 }
 
 export async function platformLogin(email: string, pass: string) {
   await bootstrapPlatformUser(email.trim().toLowerCase(), pass);
   const u = await prisma.platformUser.findUnique({ where: { email: email.trim().toLowerCase() } });
-  if (!u || !u.active || !(await bcrypt.compare(pass, u.passwordHash))) return null;
+  // sempre roda o bcrypt: o tempo de resposta não revela se o e-mail é da equipe da plataforma
+  const passOk = u ? await bcrypt.compare(pass, u.passwordHash) : (await burnPasswordCheck(pass), false);
+  if (!u || !u.active || !passOk) return null;
   await prisma.platformUser.update({ where: { id: u.id }, data: { lastLoginAt: new Date() } });
   return u;
 }
 
 export async function platformOverview() {
+  await requirePlatformAction();
   const [companies, active, users, sales] = await Promise.all([
     prisma.company.count(),
     prisma.company.count({ where: { active: true } }),
