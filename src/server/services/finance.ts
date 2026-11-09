@@ -15,7 +15,7 @@ import { displayStatus, entryStatus, settlementPrincipal } from "@/lib/finance";
 import { addDays, addMonths, startOfMonth, startOfWeek } from "@/lib/dates";
 import { splitInstallments, sum } from "@/lib/money";
 import { newKey } from "@/lib/utils";
-import { emitEvent } from "./automations";
+import { clientContact, emitEvent } from "./automations";
 import { refreshCommissionStatus, saleScope } from "./sales";
 import { refreshInvoiceStatus } from "./invoices";
 import { assertPayableCategory, categoryMap } from "./admin";
@@ -605,8 +605,9 @@ async function afterSettlementChange(tx: Tx, ctx: Ctx, kind: EntryKind, entryId:
     return;
   }
   if (op !== "baixa") return;
-  const r = await tx.receivable.findUnique({ where: { id: entryId }, include: { sale: { select: { id: true, code: true } }, client: true } });
+  const r = await tx.receivable.findUnique({ where: { id: entryId }, include: { sale: { select: { id: true, code: true, seller: { select: { name: true } } } }, client: true, company: { select: { name: true, tradeName: true } } } });
   if (!r?.sale) return;
+  const st = await tx.settlement.findUnique({ where: { id: settlementId }, select: { amountCents: true, date: true } });
   await emitEvent(tx, ctx.companyId, "pagamento_identificado.evento", {
     type: "pagamento.identificado",
     entityType: "Settlement",
@@ -617,8 +618,13 @@ async function afterSettlementChange(tx: Tx, ctx: Ctx, kind: EntryKind, entryId:
       saleCode: r.sale.code,
       receivableId: r.id,
       status: r.status,
+      paidCents: st?.amountCents ?? null,
+      paidDate: st?.date ?? null,
       balanceCents: r.amountCents - r.settledCents,
-      client: r.client ? { id: r.client.id, name: r.client.name, fredyContactId: r.client.fredyContactId } : null,
+      sellerName: r.sale.seller?.name ?? null,
+      agencyName: r.company.tradeName || r.company.name,
+      // mesmo formato dos outros avisos (nome, primeiro nome, WhatsApp com 55, e-mail)
+      client: r.client ? clientContact(r.client) : null,
       messagingAllowed: !!r.client?.consentMessaging,
     },
   });
