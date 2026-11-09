@@ -34,7 +34,7 @@ export function RunNowButton() {
           success: false,
           onSuccess: (r) =>
             toast.success(
-              `Verificação concluída: ${r.vencendo} lembrete(s), ${r.viagemProxima} viagem(ns) próxima(s), ${r.concluidas} viagem(ns) concluída(s).` +
+              `Verificação concluída: ${r.concluidas} viagem(ns) concluída(s).` +
                 (r.dispatch.skipped ? " Sem destino configurado para entrega." : ` Entregues: ${r.dispatch.delivered}, falhas: ${r.dispatch.failed}.`),
             ),
         })

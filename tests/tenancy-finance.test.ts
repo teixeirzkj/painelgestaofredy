@@ -122,12 +122,12 @@ describe("financeiro operacional", () => {
   });
 
   it("automações agendadas são idempotentes", async () => {
-    await prisma.automationSetting.create({ data: { companyId: env.company.id, key: "viagem_proxima.evento", enabled: true } });
+    await prisma.automationSetting.create({ data: { companyId: env.company.id, key: "viagem_concluida.evento", enabled: true } });
     await createSale(env.seller, exampleSale(env.client.id, env.supplier.id, { tripStart: "2026-11-06", tripEnd: "2026-11-10" }));
-    const r1 = await runScheduledAutomations(env.company.id, "2026-11-04");
-    const r2 = await runScheduledAutomations(env.company.id, "2026-11-04");
-    expect(r1.viagemProxima).toBe(1);
-    expect(r2.viagemProxima).toBe(0);
-    expect(await prisma.automationEvent.count({ where: { companyId: env.company.id, type: "viagem.proxima" } })).toBe(1);
+    const r1 = await runScheduledAutomations(env.company.id, "2026-11-11");
+    const r2 = await runScheduledAutomations(env.company.id, "2026-11-11");
+    expect(r1.concluidas).toBeGreaterThanOrEqual(1);
+    expect(r2.concluidas).toBe(0);
+    expect(await prisma.automationEvent.count({ where: { companyId: env.company.id, type: "viagem.concluida" } })).toBe(r1.concluidas);
   });
 });

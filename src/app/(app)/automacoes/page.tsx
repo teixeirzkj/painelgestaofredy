@@ -27,14 +27,10 @@ export default async function AutomationsPage({ searchParams }: { searchParams: 
       <div className="mb-6 space-y-3">
         {!hasDestination && (
           <Notice tone="amber" title="Integração com o Frédy ainda não configurada">
-            Os eventos estão sendo registrados, mas nenhum destino foi configurado. Em Configurações → Integrações, defina um webhook (ex.: fluxo n8n que fala com o CRM Frédy) ou
+            Os eventos estão sendo registrados, mas nenhum destino foi configurado. Em Configurações → Integrações, defina um webhook ou
             gere uma chave de API para o Frédy consultar os eventos. Nenhum endpoint do Frédy é presumido por este módulo.
           </Notice>
         )}
-        <Notice title="Mensagens ao cliente">
-          Eventos que podem gerar mensagens (lembretes, pré-viagem, pós-venda) indicam <code>messagingAllowed</code> conforme o consentimento do cliente. O disparo efetivo depende de
-          canal autorizado e de configuração aprovada no Frédy.
-        </Notice>
       </div>
       <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {groups.map((g) => (

@@ -67,14 +67,14 @@ export function IntegrationsForm({ hasApiKey, webhookUrl, hasSecret, base }: { h
       <Card>
         <CardHeader title="Webhook de eventos" description="Envia cada evento (venda confirmada, pagamento identificado…) via POST JSON." />
         <div className="space-y-4 p-5">
-          <Field label="URL de destino (https)" hint="Ex.: um fluxo n8n que repassa ao CRM Frédy.">
+          <Field label="URL de destino (https)" hint="Ex.: um sistema externo que recebe os eventos da gestão.">
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
           </Field>
           <Field label="Segredo para assinatura HMAC" hint="Enviado como X-Fredy-Signature (SHA-256 do corpo).">
             <PasswordInput value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
           </Field>
           <p className="rounded-lg bg-slate-50 p-3 text-xs text-muted">
-            Eventos enviados: venda.confirmada, pagamento.identificado, pagamento.vencendo, viagem.proxima, viagem.checkin, viagem.concluida (feedback), cliente.aniversario e contrato.assinado. Cada um traz o cliente com nome, primeiro nome, WhatsApp (com 55), e-mail e o campo messagingAllowed (consentimento LGPD): só envie mensagem quando ele for true. Ative cada um em Automações.
+            Eventos enviados: venda.confirmada, pagamento.identificado, viagem.concluida e contrato.assinado. Ative cada um em Automações.
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="outline" loading={busy} disabled={!url} onClick={() => run(() => sendTestWebhookAction())}>

@@ -1,7 +1,6 @@
 import { createHmac } from "node:crypto";
 import { prisma, type Tx } from "../db";
 import { assertCan, today, type Ctx } from "../context";
-import { addDays, diffDays } from "@/lib/dates";
 import { audit } from "../audit";
 import { AppError } from "../errors";
 import { deliverToFredy, hasActiveFredy } from "./fredy";
@@ -52,15 +51,6 @@ export const AUTOMATIONS = [
     eventType: "contrato.assinado",
   },
   {
-    key: "pagamento_vencendo.evento",
-    group: "Pagamento próximo do vencimento",
-    title: "Gerar evento para lembrete",
-    description: "Publica pagamento.vencendo para parcelas que vencem na janela configurada. O envio de mensagem depende de canal autorizado e consentimento do cliente.",
-    core: false,
-    defaultEnabled: false,
-    eventType: "pagamento.vencendo",
-  },
-  {
     key: "pagamento_identificado.evento",
     group: "Pagamento identificado",
     title: "Atualizar venda e publicar evento",
@@ -70,40 +60,13 @@ export const AUTOMATIONS = [
     eventType: "pagamento.identificado",
   },
   {
-    key: "viagem_proxima.evento",
-    group: "Viagem próxima",
-    title: "Eventos de check-in e orientações pré-viagem",
-    description: "Publica viagem.proxima para vendas com embarque na janela configurada.",
-    core: false,
-    defaultEnabled: false,
-    eventType: "viagem.proxima",
-  },
-  {
     key: "viagem_concluida.evento",
     group: "Viagem concluída",
-    title: "Pós-venda e pedido de feedback",
-    description: "No dia seguinte ao retorno, marca a venda como concluída e publica viagem.concluida (use no n8n para pedir avaliação e feedback).",
+    title: "Marcar venda como concluída",
+    description: "No dia seguinte ao retorno, marca a venda como concluída e publica viagem.concluida.",
     core: false,
     defaultEnabled: false,
     eventType: "viagem.concluida",
-  },
-  {
-    key: "checkin_lembrete.evento",
-    group: "Lembrete de check-in",
-    title: "Lembrete de check-in (1 dia antes do embarque)",
-    description: "Publica viagem.checkin na véspera do embarque, com destino, data e localizador (use no n8n para lembrar o cliente de fazer o check-in).",
-    core: false,
-    defaultEnabled: false,
-    eventType: "viagem.checkin",
-  },
-  {
-    key: "cliente_aniversario.evento",
-    group: "Aniversário do cliente",
-    title: "Mensagem de aniversário",
-    description: "Publica cliente.aniversario no dia do aniversário de cada cliente ativo (use no n8n para enviar a mensagem de parabéns).",
-    core: false,
-    defaultEnabled: false,
-    eventType: "cliente.aniversario",
   },
 ] as const;
 
@@ -260,69 +223,9 @@ export async function dispatchPendingEvents(companyId: string, limit = 50) {
 export async function runScheduledAutomations(companyId: string, todayStr?: string) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
   const t = todayStr ?? today(company);
-  const result = { vencendo: 0, viagemProxima: 0, concluidas: 0, checkin: 0, aniversarios: 0 };
+  const result = { concluidas: 0 };
 
   await prisma.$transaction(async (tx) => {
-    // Pagamentos próximos do vencimento
-    if (await isAutomationEnabled(tx, companyId, "pagamento_vencendo.evento")) {
-      const due = await tx.receivable.findMany({
-        where: {
-          companyId,
-          status: { in: ["PENDENTE", "PARCIAL"] },
-          dueDate: { gte: t, lte: addDays(t, company.upcomingDueDays) },
-        },
-        include: { client: true, sale: { select: { code: true, seller: { select: { name: true } } } } },
-      });
-      for (const r of due) {
-        const created = await emitEvent(tx, companyId, "pagamento_vencendo.evento", {
-          type: "pagamento.vencendo",
-          entityType: "Receivable",
-          entityId: r.id,
-          idempotencyKey: `pagamento.vencendo:${r.id}:${r.dueDate}`,
-          payload: {
-            receivableId: r.id,
-            saleCode: r.sale?.code ?? null,
-            dueDate: r.dueDate,
-            balanceCents: r.amountCents - r.settledCents,
-            sellerName: r.sale?.seller?.name ?? null,
-            agencyName: company.tradeName || company.name,
-            client: r.client ? clientContact(r.client) : null,
-            messagingAllowed: !!r.client?.consentMessaging,
-          },
-        });
-        if (created) result.vencendo++;
-      }
-    }
-
-    // Viagens próximas
-    if (await isAutomationEnabled(tx, companyId, "viagem_proxima.evento")) {
-      const trips = await tx.sale.findMany({
-        where: { companyId, status: "CONFIRMADA", tripStart: { gte: t, lte: addDays(t, company.upcomingTripDays) } },
-        include: { client: true, seller: { select: { name: true } } },
-      });
-      for (const s of trips) {
-        const created = await emitEvent(tx, companyId, "viagem_proxima.evento", {
-          type: "viagem.proxima",
-          entityType: "Sale",
-          entityId: s.id,
-          idempotencyKey: `viagem.proxima:${s.id}:${s.tripStart}`,
-          payload: {
-            saleId: s.id,
-            saleCode: s.code,
-            destination: s.destination,
-            tripStart: s.tripStart,
-            daysToTrip: diffDays(s.tripStart!, t),
-            locator: s.locator,
-            sellerName: s.seller?.name ?? null,
-            agencyName: company.tradeName || company.name,
-            client: clientContact(s.client),
-            messagingAllowed: s.client.consentMessaging,
-          },
-        });
-        if (created) result.viagemProxima++;
-      }
-    }
-
     // Viagens concluídas
     if (await isAutomationEnabled(tx, companyId, "viagem_concluida.evento")) {
       const done = await tx.sale.findMany({
@@ -351,64 +254,6 @@ export async function runScheduledAutomations(companyId: string, todayStr?: stri
       }
     }
   });
-  // Lembrete de check-in: vendas com embarque amanhã
-  await prisma.$transaction(async (tx) => {
-    if (!(await isAutomationEnabled(tx, companyId, "checkin_lembrete.evento"))) return;
-    const tomorrow = addDays(t, 1);
-    const sales = await tx.sale.findMany({
-      where: { companyId, status: "CONFIRMADA", tripStart: tomorrow },
-      include: { client: true, seller: { select: { name: true } }, items: { select: { productType: true, locator: true, description: true } } },
-    });
-    for (const s of sales) {
-      const created = await emitEvent(tx, companyId, "checkin_lembrete.evento", {
-        type: "viagem.checkin",
-        entityType: "Sale",
-        entityId: s.id,
-        idempotencyKey: `viagem.checkin:${s.id}:${s.tripStart}`,
-        payload: {
-          saleId: s.id,
-          saleCode: s.code,
-          destination: s.destination,
-          tripStart: s.tripStart,
-          tripEnd: s.tripEnd,
-          locator: s.locator,
-          hasFlight: s.items.some((i) => i.productType === "AEREO"),
-          items: s.items.map((i) => ({ productType: i.productType, description: i.description, locator: i.locator })),
-          sellerName: s.seller?.name ?? null,
-          agencyName: company.tradeName || company.name,
-          client: clientContact(s.client),
-          messagingAllowed: s.client.consentMessaging,
-        },
-      });
-      if (created) result.checkin++;
-    }
-  });
-
-  // Aniversário: clientes ativos que fazem aniversário hoje (uma vez por ano)
-  await prisma.$transaction(async (tx) => {
-    if (!(await isAutomationEnabled(tx, companyId, "cliente_aniversario.evento"))) return;
-    const mmdd = t.slice(5);
-    const candidates = await tx.client.findMany({ where: { companyId, archivedAt: null, birthDate: { endsWith: mmdd } } });
-    // 29/02 comemora em 28/02 nos anos não bissextos
-    const leap = mmdd === "02-28" && !isLeapYear(Number(t.slice(0, 4))) ? await tx.client.findMany({ where: { companyId, archivedAt: null, birthDate: { endsWith: "02-29" } } }) : [];
-    for (const c of [...candidates, ...leap]) {
-      const created = await emitEvent(tx, companyId, "cliente_aniversario.evento", {
-        type: "cliente.aniversario",
-        entityType: "Client",
-        entityId: c.id,
-        idempotencyKey: `cliente.aniversario:${c.id}:${t.slice(0, 4)}`,
-        payload: {
-          birthDate: c.birthDate,
-          age: Number(t.slice(0, 4)) - Number(c.birthDate!.slice(0, 4)),
-          agencyName: company.tradeName || company.name,
-          client: clientContact(c),
-          messagingAllowed: c.consentMessaging,
-        },
-      });
-      if (created) result.aniversarios++;
-    }
-  });
-
   const dispatch = await dispatchPendingEvents(companyId);
   return { ...result, dispatch };
 }
@@ -424,30 +269,20 @@ export async function listEvents(ctx: Ctx, opts: { page?: number; type?: string 
   return { items, total, page, pages: Math.max(1, Math.ceil(total / 25)) };
 }
 
-function isLeapYear(y: number) {
-  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-}
-
-/** Envia um evento de exemplo ao webhook da agência (para montar o fluxo no n8n). Não grava nada. */
+/** Envia um evento de exemplo ao webhook da agência. Não grava nada. */
 export async function sendTestWebhook(ctx: Ctx) {
   assertCan(ctx, "settings.manage");
   const company = await prisma.company.findUniqueOrThrow({ where: { id: ctx.companyId } });
   if (!company.webhookUrl) throw new AppError("Salve a URL do webhook antes de testar.");
   const payloadJson = JSON.stringify({
-    type: "cliente.aniversario",
+    type: "venda.confirmada",
     occurredAt: new Date().toISOString(),
     test: true,
-    data: {
-      birthDate: "1990-04-02",
-      age: 36,
-      agencyName: company.tradeName || company.name,
-      client: { id: "exemplo", name: "Maria Exemplo da Silva", firstName: "Maria", whatsapp: "5542999990000", email: "maria@exemplo.com", fredyContactId: null },
-      messagingAllowed: true,
-    },
+    data: { saleId: "exemplo", saleCode: "V-0000", grossCents: 100000, client: { id: "exemplo", name: "Maria Exemplo da Silva", fredyContactId: null } },
   });
   try {
-    await new WebhookAdapter(company.webhookUrl, company.webhookSecret).deliver({ id: "teste", type: "cliente.aniversario", payloadJson });
+    await new WebhookAdapter(company.webhookUrl, company.webhookSecret).deliver({ id: "teste", type: "venda.confirmada", payloadJson });
   } catch (e) {
-    throw new AppError(`O webhook não aceitou o evento de teste (${(e as Error).message}). Confira a URL e se o fluxo do n8n está ativo.`);
+    throw new AppError(`O webhook não aceitou o evento de teste (${(e as Error).message}). Confira a URL e se o destino está ativo.`);
   }
 }
