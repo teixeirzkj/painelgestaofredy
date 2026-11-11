@@ -34,6 +34,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         { href: "/excursoes", label: "Excursões e grupos", icon: "Bus" },
         ...when(has("contracts.manage"), { href: "/contratos", label: "Contratos", icon: "FileSignature" }),
         { href: "/clientes", label: "Clientes", icon: "Users" },
+        { href: "/central-viagem", label: "Central da Viagem", icon: "Radar" },
         { href: "/embarques", label: "Próximos embarques", icon: "PlaneTakeoff" },
         { href: "/creditos", label: "Créditos", icon: "Gift" },
         { href: "/aniversariantes", label: "Aniversariantes", icon: "Cake" },

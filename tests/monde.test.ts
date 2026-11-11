@@ -40,7 +40,7 @@ const sales: Record<string, object> = {
         commission_amount: 0,
         totals: { customer_amount: 1200, rav_fee: 100 },
         supplier: { id: "p-air" },
-        segments: [{ origin: "CWB", destination: "MCO", departure_date: "2026-12-10T08:00:00" }],
+        segments: [{ airline_code: "LA", flight_number: "8084", origin: "CWB", destination: "MCO", departure_date: "2026-12-10T08:00:00", arrival_date: "2026-12-10T16:30:00" }],
         passengers: [{ person: { id: "p-cli" } }],
       },
     ],
@@ -126,6 +126,9 @@ describe("Monde (API v3)", () => {
     expect(s1).toMatchObject({ origin: "MONDE", status: "CONFIRMADA", saleDate: "2026-10-01", tripStart: "2026-12-10", tripEnd: "2026-12-20", clientPayableCents: 500000, sellerCommissionCents: 15000 });
     expect(s1.seller.name).toBe("Vendedora");
     expect(s1.notes).toContain("venda nº 101");
+    expect(await prisma.flightSegment.findMany({ where: { saleId: s1.id }, select: { airline: true, flightNumber: true, origin: true, destination: true, departureAt: true, arrivalAt: true, source: true } })).toEqual([
+      { airline: "LA", flightNumber: "8084", origin: "CWB", destination: "MCO", departureAt: "2026-12-10T08:00", arrivalAt: "2026-12-10T16:30", source: "MONDE" },
+    ]);
     expect(s1.passengers.map((p) => p.name).sort()).toEqual(["Carla Monde", "John Smith"]);
     const pkg = s1.items.find((i) => i.productType === "PACOTE");
     const air = s1.items.find((i) => i.productType === "AEREO");

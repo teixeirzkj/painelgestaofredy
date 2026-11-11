@@ -21,20 +21,21 @@ datasource db {
 }
 
 model Company {
-  id                  String   @id @default(cuid())
+  id                  String          @id @default(cuid())
+  flightSegments      FlightSegment[]
   name                String
   document            String?
-  timezone            String   @default("America/Sao_Paulo")
-  isDemo              Boolean  @default(false)
-  active              Boolean  @default(true) // conta suspensa pela plataforma = ninguém entra
+  timezone            String          @default("America/Sao_Paulo")
+  isDemo              Boolean         @default(false)
+  active              Boolean         @default(true) // conta suspensa pela plataforma = ninguém entra
   suspendedReason     String?
   logoKey             String? // logo da agência (armazenamento interno)
-  plan                String   @default("PADRAO")
-  maxUsers            Int      @default(5)
+  plan                String          @default("PADRAO")
+  maxUsers            Int             @default(5)
   createdByPlatformId String?
-  commissionPayDay    Int      @default(5) // dia do mês seguinte para pagamento de comissões
-  upcomingDueDays     Int      @default(5) // janela de "próximo do vencimento"
-  upcomingTripDays    Int      @default(7) // janela de "viagem próxima"
+  commissionPayDay    Int             @default(5) // dia do mês seguinte para pagamento de comissões
+  upcomingDueDays     Int             @default(5) // janela de "próximo do vencimento"
+  upcomingTripDays    Int             @default(7) // janela de "viagem próxima"
   webhookUrl          String? // destino genérico de eventos (opcional)
   webhookSecret       String?
   apiKeyHash          String? // chave para API de eventos (hash SHA-256)
@@ -45,8 +46,8 @@ model Company {
   responsibleName     String? // responsável legal (contratos)
   responsibleDocument String?
   responsibleRole     String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   users              User[]
   rolePermissions    RolePermission[]
@@ -233,53 +234,54 @@ model Supplier {
 }
 
 model Sale {
-  id                          String     @id @default(cuid())
+  id                          String          @id @default(cuid())
+  flights                     FlightSegment[]
   companyId                   String
-  company                     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company                     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   number                      Int
   code                        String // ex.: V-2026-0001
   saleDate                    String
   clientId                    String
-  client                      Client     @relation(fields: [clientId], references: [id])
+  client                      Client          @relation(fields: [clientId], references: [id])
   sellerId                    String
-  seller                      User       @relation("SaleSeller", fields: [sellerId], references: [id])
+  seller                      User            @relation("SaleSeller", fields: [sellerId], references: [id])
   createdById                 String
-  createdBy                   User       @relation("SaleCreatedBy", fields: [createdById], references: [id])
+  createdBy                   User            @relation("SaleCreatedBy", fields: [createdById], references: [id])
   mainProductType             String
   destination                 String?
   tripStart                   String?
   tripEnd                     String?
-  passengerCount              Int        @default(1)
+  passengerCount              Int             @default(1)
   locator                     String?
   tripId                      String?
-  trip                        Trip?      @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  trip                        Trip?           @relation(fields: [tripId], references: [id], onDelete: SetNull)
   excursionId                 String?
-  excursion                   Excursion? @relation(fields: [excursionId], references: [id], onDelete: SetNull)
+  excursion                   Excursion?      @relation(fields: [excursionId], references: [id], onDelete: SetNull)
   intermediaryId              String? // intermediário/freelancer (fornecedor da categoria INTERMEDIARIO)
-  intermediary                Supplier?  @relation("SaleIntermediary", fields: [intermediaryId], references: [id], onDelete: SetNull)
-  intermediaryCommissionCents Int        @default(0)
-  origin                      String     @default("MANUAL") // MANUAL | API (orçamento recebido por integração)
+  intermediary                Supplier?       @relation("SaleIntermediary", fields: [intermediaryId], references: [id], onDelete: SetNull)
+  intermediaryCommissionCents Int             @default(0)
+  origin                      String          @default("MANUAL") // MANUAL | API (orçamento recebido por integração)
   externalRef                 String? // referência externa (ex.: id do orçamento no CRM)
   status                      String // ORCAMENTO | CONFIRMADA | CONCLUIDA | CANCELADA
   // Valores calculados (centavos) — recalculados a cada alteração
-  feesCents                   Int        @default(0)
-  discountCents               Int        @default(0)
-  grossCents                  Int        @default(0) // faturamento comercial
-  clientPayableCents          Int        @default(0) // valor que o cliente paga à agência
-  costCents                   Int        @default(0) // custos/repasses a fornecedores
-  agencyRevenueCents          Int        @default(0) // receita própria da agência
-  sellerCommissionCents       Int        @default(0)
-  grossProfitCents            Int        @default(0)
-  marginBps                   Int        @default(0)
-  paymentPlanJson             String     @default("[]") // parcelas planejadas [{key, dueDate, amountCents, method, description}]
+  feesCents                   Int             @default(0)
+  discountCents               Int             @default(0)
+  grossCents                  Int             @default(0) // faturamento comercial
+  clientPayableCents          Int             @default(0) // valor que o cliente paga à agência
+  costCents                   Int             @default(0) // custos/repasses a fornecedores
+  agencyRevenueCents          Int             @default(0) // receita própria da agência
+  sellerCommissionCents       Int             @default(0)
+  grossProfitCents            Int             @default(0)
+  marginBps                   Int             @default(0)
+  paymentPlanJson             String          @default("[]") // parcelas planejadas [{key, dueDate, amountCents, method, description}]
   notes                       String?
   confirmedAt                 DateTime?
   reviewedAt                  DateTime? // conferida pelo financeiro (edição passa a exigir solicitação aprovada)
   reviewedById                String?
   cancelledAt                 DateTime?
   cancelReason                String?
-  createdAt                   DateTime   @default(now())
-  updatedAt                   DateTime   @updatedAt
+  createdAt                   DateTime        @default(now())
+  updatedAt                   DateTime        @updatedAt
 
   items        SaleItem[]
   passengers   Passenger[]
@@ -1024,21 +1026,21 @@ model PlatformSetting {
 
 /// Importação de clientes do Monde pela API oficial (https://github.com/monde-sistemas/monde-api).
 model MondeIntegration {
-  id           String    @id @default(cuid())
-  companyId    String    @unique
-  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  login        String // descrição da conexão (API v3: "Credencial da API")
-  passwordEnc  String // credencial da API v3 do Monde, criptografada (AES-256-GCM)
-  status       String    @default("CONECTADA") // CONECTADA | ERRO
-  lastError    String?
-  nextPage     Int       @default(1) // próxima página da importação em andamento
-  totalPages   Int?
-  importing    Boolean   @default(false)
-  createdCount Int       @default(0)
-  updatedCount Int       @default(0)
-  skippedCount Int       @default(0)
-  lastImportAt DateTime?
-  peopleCursor String? // cursor da próxima página de pessoas (API v3)
+  id                String    @id @default(cuid())
+  companyId         String    @unique
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  login             String // descrição da conexão (API v3: "Credencial da API")
+  passwordEnc       String // credencial da API v3 do Monde, criptografada (AES-256-GCM)
+  status            String    @default("CONECTADA") // CONECTADA | ERRO
+  lastError         String?
+  nextPage          Int       @default(1) // próxima página da importação em andamento
+  totalPages        Int?
+  importing         Boolean   @default(false)
+  createdCount      Int       @default(0)
+  updatedCount      Int       @default(0)
+  skippedCount      Int       @default(0)
+  lastImportAt      DateTime?
+  peopleCursor      String? // cursor da próxima página de pessoas (API v3)
   // Importação de vendas (API v3): retomável pelo cursor da página em andamento
   salesCursor       String?
   salesImporting    Boolean   @default(false)
@@ -1047,8 +1049,8 @@ model MondeIntegration {
   salesFailed       Int       @default(0)
   salesErrorsJson   String    @default("[]") // últimas falhas: [{numero, motivo}]
   salesLastImportAt DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }
 
 /// Atendimento na venda rápida (popup do atendente): guarda em que etapa cada cliente parou,
@@ -1075,4 +1077,27 @@ model BalcaoFlow {
   @@index([companyId, clientId])
   @@index([companyId, fredyCardId])
   @@index([companyId, userId, finishedAt])
+}
+
+/// Trecho de voo de uma venda (Central da Viagem). Preenchido na venda ou pela importação do Monde.
+/// Horários locais de cada aeroporto, no formato AAAA-MM-DDTHH:mm.
+model FlightSegment {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId       String
+  sale         Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  airline      String // código IATA da companhia (ex.: LA, G3, TP)
+  flightNumber String // número do voo (ex.: 8084)
+  origin       String // aeroporto de origem, código IATA (ex.: GRU)
+  destination  String // aeroporto de destino, código IATA (ex.: LIS)
+  departureAt  String // partida, horário local da origem
+  arrivalAt    String? // chegada, horário local do destino
+  source       String   @default("MANUAL") // MANUAL | MONDE
+  status       String   @default("PROGRAMADO") // PROGRAMADO (o acompanhamento ao vivo depende de um provedor de voos)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([companyId, departureAt])
+  @@index([saleId])
 }

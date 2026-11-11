@@ -17,6 +17,7 @@ import { decryptSecret, encryptSecret } from "../secrets";
 import { upsertImportedClient, type ImportedClient } from "./client-import";
 import { createSale } from "./sales";
 import { settleEntryTx } from "./finance";
+import { saveMondeFlights } from "./flights";
 import { calculateSale } from "@/lib/finance";
 import type { CommercialModel, PaymentMethod, ProductType } from "@/lib/constants";
 import { ZodError } from "zod";
@@ -620,6 +621,10 @@ async function importOneSale(ctx: Ctx, reader: MondeReader, mondeId: string, env
     },
     { origin: "MONDE", externalRef: `monde:${d.id}` },
   );
+
+  // voos dos bilhetes aéreos (Central da Viagem)
+  const segments = products.filter(({ kind }) => kind === "airline_tickets").flatMap(({ p }) => (p.segments as Parameters<typeof saveMondeFlights>[3] | undefined) ?? []);
+  if (segments.length) await prisma.$transaction((tx) => saveMondeFlights(tx, ctx.companyId, r.id, segments));
 
   // baixa do que já está pago no Monde
   await prisma.$transaction(async (tx) => {

@@ -32,6 +32,7 @@ const LABELS: Record<string, string> = {
   configuracoes: "Configurações",
   vendedor: "Painel do vendedor",
   embarques: "Próximos embarques",
+  "central-viagem": "Central da Viagem",
   creditos: "Créditos",
   aniversariantes: "Aniversariantes",
   solicitacoes: "Solicitações de edição",

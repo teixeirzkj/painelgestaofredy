@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { orNotFound } from "@/server/page-helpers";
-import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History, Paperclip, Plane, UserRound, Check, CircleDashed, Bus, Webhook, ShieldCheck } from "lucide-react";
+import { FileSignature, ExternalLink, Package, Users, Wallet, Building2, History, Paperclip, Plane, UserRound, Check, CircleDashed, Bus, Webhook, ShieldCheck, PlaneTakeoff } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { getSale, getSaleAudit } from "@/server/services/sales";
@@ -18,6 +18,8 @@ import { clientDocHint, hasClientDocument, missingDocLabel } from "@/lib/client-
 import type { Params } from "@/lib/params";
 import { SaleHeaderActions } from "../sale-actions";
 import { ReservationEditor } from "./reservation-editor";
+import { FlightsPanel } from "./flights-panel";
+import { listSaleFlights } from "@/server/services/flights";
 import { PrepareContractButton } from "./prepare-contract";
 import { RefundButton, TripLink } from "./sale-extras";
 import { RequestEditButton } from "../../solicitacoes/review-client";
@@ -67,6 +69,7 @@ export default async function SalePage({ params }: { params: Params }) {
   const ctx = await requirePageContext();
   const { id } = await params;
   const [s, history, suppliers] = await orNotFound(Promise.all([getSale(ctx, id), getSaleAudit(ctx, id), can(ctx, "finance.manage") ? supplierOptions(ctx) : Promise.resolve([])]));
+  const flights = await listSaleFlights(ctx, id);
   const t = today(ctx);
   // contrato que vale para a venda: o próprio ou o contrato da viagem
   const contract = effectiveContract(s);
@@ -430,6 +433,12 @@ export default async function SalePage({ params }: { params: Params }) {
                 ]}
               />
               <TripLink saleId={s.id} clientId={s.clientId} trip={s.trip} canEdit={s.permissions.canEdit && s.status !== "CANCELADA"} />
+            </div>
+          </Card>
+          <Card>
+            <CardHeader title="Voos" icon={PlaneTakeoff} description="Aparecem na Central da Viagem" />
+            <div className="p-5">
+              <FlightsPanel saleId={s.id} flights={flights} canEdit={s.status !== "CANCELADA" && (s.sellerId === ctx.userId || can(ctx, "sales.edit_all"))} />
             </div>
           </Card>
           <Card>

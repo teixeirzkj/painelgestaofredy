@@ -24,6 +24,7 @@ import * as sales from "@/server/services/sales";
 import * as finance from "@/server/services/finance";
 import * as clientImport from "@/server/services/client-import";
 import * as monde from "@/server/services/monde";
+import * as flights from "@/server/services/flights";
 import * as registry from "@/server/services/registry";
 import * as contracts from "@/server/services/contracts";
 import * as automations from "@/server/services/automations";
@@ -123,6 +124,10 @@ export const updateReservationAction = async (id: string, data: { status: string
     if (!["PENDENTE", "CONFIRMADA", "CANCELADA"].includes(data.status)) throw new AppError("Status inválido.");
     await prisma.reservation.update({ where: { id }, data: { status: data.status, locator: data.locator?.slice(0, 60) || null, notes: data.notes?.slice(0, 1000) || null } });
   }, "Reserva atualizada.");
+
+// ------------------------------ Voos (Central da Viagem) ------------------------------
+export const saveFlightAction = async (saleId: string, id: string | null, input: unknown) => act((ctx) => flights.saveFlight(ctx, saleId, id, input), "Voo salvo.");
+export const deleteFlightAction = async (saleId: string, id: string) => act((ctx) => flights.deleteFlight(ctx, saleId, id), "Voo excluído.");
 
 // ------------------------------ Clientes e fornecedores ------------------------------
 export const searchClientsAction = async (q: string) => act((ctx) => registry.searchClients(ctx, q));
