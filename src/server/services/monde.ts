@@ -41,7 +41,7 @@ async function paced() {
 async function mondeGet<T = Obj>(token: string, path: string, opts: { allowNotFound?: boolean } = {}): Promise<T | null> {
   for (let attempt = 0; ; attempt++) {
     await paced();
-    const res = await fetch(BASE + path, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(BASE + path, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000) });
     if (res.status === 429 && attempt < 2) {
       await sleep(3_500); // a janela do limite é de 3 segundos
       continue;

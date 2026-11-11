@@ -65,6 +65,7 @@ function fakeMonde() {
   const page = (data: unknown[], next: string | null = null) => json({ data, pagination: { size: 20, has_next_page: !!next, next_cursor: next } });
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (new Headers(init?.headers).get("content-type") !== "application/json") return json({ errors: ["O cabeçalho Content-Type da requisição especificou um tipo de mídia que não é suportado pela API."] }, 415);
     if (new Headers(init?.headers).get("authorization") !== `Bearer ${TOKEN}`) return json({ errors: ["Credencial inválida"] }, 401);
     const path = url.pathname.replace("/api/v3", "");
     const cursor = url.searchParams.get("cursor");
