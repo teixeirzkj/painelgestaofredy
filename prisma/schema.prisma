@@ -215,6 +215,7 @@ model Supplier {
   bankInfo     String?
   pixKey       String?
   notes        String?
+  mondeId      String? // id da pessoa no Monde (importação de vendas)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   archivedAt   DateTime?
@@ -1026,8 +1027,8 @@ model MondeIntegration {
   id           String    @id @default(cuid())
   companyId    String    @unique
   company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  login        String // usuario@agencia.monde.com.br
-  passwordEnc  String // senha criptografada (AES-256-GCM)
+  login        String // descrição da conexão (API v3: "Credencial da API")
+  passwordEnc  String // credencial da API v3 do Monde, criptografada (AES-256-GCM)
   status       String    @default("CONECTADA") // CONECTADA | ERRO
   lastError    String?
   nextPage     Int       @default(1) // próxima página da importação em andamento
@@ -1037,6 +1038,15 @@ model MondeIntegration {
   updatedCount Int       @default(0)
   skippedCount Int       @default(0)
   lastImportAt DateTime?
+  peopleCursor String? // cursor da próxima página de pessoas (API v3)
+  // Importação de vendas (API v3): retomável pelo cursor da página em andamento
+  salesCursor       String?
+  salesImporting    Boolean   @default(false)
+  salesCreated      Int       @default(0)
+  salesSkipped      Int       @default(0)
+  salesFailed       Int       @default(0)
+  salesErrorsJson   String    @default("[]") // últimas falhas: [{numero, motivo}]
+  salesLastImportAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 }

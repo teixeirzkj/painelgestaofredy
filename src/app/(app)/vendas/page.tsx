@@ -13,6 +13,8 @@ import { formatDate } from "@/lib/dates";
 import { FINANCIAL_STATUS, PRODUCT_TYPES, SALE_STATUS } from "@/lib/constants";
 import { int, str, withParams, type SearchParams } from "@/lib/params";
 import { SaleRowActions } from "./sale-actions";
+import { getMonde } from "@/server/services/monde";
+import { MondeSalesButton } from "@/components/monde-import";
 
 export const metadata = { title: "Vendas" };
 
@@ -38,13 +40,18 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
   };
   const [data, sellers] = await Promise.all([listSales(ctx, f), can(ctx, "sales.view_all") ? sellerOptions(ctx) : Promise.resolve([])]);
   const showMargin = can(ctx, "sales.view_margin");
+  const mondeAllowed = ["settings.manage", "sales.edit_all", "finance.manage"].every((k) => can(ctx, k as never));
   const filtered = Object.entries(f).some(([k, v]) => k !== "page" && k !== "sort" && v);
   const secondary = [f.productType, f.from, f.to, f.sellerId].filter(Boolean).length;
   const sm = data.summary;
 
   return (
     <>
-      <PageHeader title="Vendas" description={can(ctx, "sales.view_all") ? "Vendas da agência, com situação financeira e de contrato." : "Suas vendas, com situação financeira e de contrato."} />
+      <PageHeader
+        title="Vendas"
+        description={can(ctx, "sales.view_all") ? "Vendas da agência, com situação financeira e de contrato." : "Suas vendas, com situação financeira e de contrato."}
+        actions={mondeAllowed ? <MondeSalesButton monde={await getMonde(ctx)} /> : undefined}
+      />
 
       <section aria-label="Resumo" className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label={filtered ? "Vendas no filtro" : "Vendas"} value={String(sm.count)} icon={Hash} hint="exceto canceladas" />

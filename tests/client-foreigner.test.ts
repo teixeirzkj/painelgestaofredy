@@ -227,6 +227,7 @@ describe("importação com estrangeiro", () => {
   });
 
   it("Monde: sexo vem do campo gender", () => {
-    expect(mapMondePerson({ attributes: { name: "A B C", gender: "F" } } as never).gender).toBe("F");
+    expect(mapMondePerson({ id: "x", name: "A B C", gender: "female" }).gender).toBe("F");
+    expect(mapMondePerson({ id: "y", name: "D E F", gender: "male", foreigner: true, foreign_identity_document: "V1" })).toMatchObject({ gender: "M", foreigner: true, rne: "V1" });
   });
 });

@@ -266,7 +266,7 @@ export function commissionDueDate(saleDate: string, payDay: number) {
 }
 
 /** Aplica todas as consequências de uma venda confirmada. Pode ser chamada várias vezes sem duplicar nada. */
-export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string, opts?: { supplierPaymentChanged?: Set<string> }) {
+export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string, opts?: { supplierPaymentChanged?: Set<string>; imported?: boolean }) {
   const sale = await tx.sale.findFirstOrThrow({
     where: { id: saleId, companyId: ctx.companyId },
     include: { items: { include: { supplier: true, operator: true } }, client: true, seller: true, company: true, intermediary: true },
@@ -463,7 +463,8 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string, opts?:
         locator: item.locator ?? sale.locator,
         startDate: sale.tripStart,
         endDate: sale.tripEnd,
-        status: "PENDENTE",
+        // venda antiga trazida do Monde: a reserva já foi feita lá
+        status: opts?.imported ? "CONFIRMADA" : "PENDENTE",
       },
       update: {
         supplierId: item.supplierId,
@@ -475,8 +476,8 @@ export async function syncConfirmedSale(tx: Tx, ctx: Ctx, saleId: string, opts?:
     });
   }
 
-  // 6) Contrato
-  await prepareContractForSale(tx, ctx.companyId, saleId, { ctx });
+  // 6) Contrato (venda antiga trazida do Monde não gera contrato novo)
+  if (!opts?.imported) await prepareContractForSale(tx, ctx.companyId, saleId, { ctx });
   return { warnings };
 }
 
@@ -628,8 +629,9 @@ function emitConfirmed(tx: Tx, ctx: Ctx, saleId: string, code: string, client: {
   });
 }
 
-export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" | "FREDY"; externalRef: string }) {
+export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" | "FREDY" | "MONDE"; externalRef: string }) {
   assertCan(ctx, "sales.create");
+  const imported = meta?.origin === "MONDE";
   const input = saleInputSchema.parse(raw);
   const totals = computeTotals(input);
 
@@ -677,8 +679,9 @@ export async function createSale(ctx: Ctx, raw: unknown, meta?: { origin: "API" 
     });
     if (!client.ownerId) await tx.client.update({ where: { id: client.id }, data: { ownerId: sellerId } });
     if (input.confirm) {
-      ({ warnings } = await syncConfirmedSale(tx, ctx, sale.id));
-      await emitConfirmed(tx, ctx, sale.id, code, client, totals.grossCents);
+      ({ warnings } = await syncConfirmedSale(tx, ctx, sale.id, { imported }));
+      // venda antiga do Monde não avisa integrações (não marca card no CRM)
+      if (!imported) await emitConfirmed(tx, ctx, sale.id, code, client, totals.grossCents);
     }
     await audit(tx, ctx, input.confirm ? "venda.criada_confirmada" : "venda.criada_rascunho", "Sale", sale.id, { code, grossCents: totals.grossCents });
     return { id: sale.id, code, warnings };

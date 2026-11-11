@@ -2,15 +2,15 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Download, FileSpreadsheet, Loader2, RefreshCw, Unplug, Upload } from "lucide-react";
-import { Button, Field, Input } from "@/components/ui";
-import { Modal, PasswordInput } from "@/components/ui/client";
+import { Download, FileSpreadsheet, Upload } from "lucide-react";
+import { Button } from "@/components/ui";
+import { Modal } from "@/components/ui/client";
 import { useAction } from "@/components/use-action";
-import { connectMondeAction, disconnectMondeAction, importClientsCsvAction, importMondeBatchAction, restartMondeImportAction } from "@/app/actions";
+import { importClientsCsvAction } from "@/app/actions";
+import { MondePanel, type MondeState } from "@/components/monde-import";
 import { CLIENT_CSV_TEMPLATE } from "@/lib/client-csv";
 import { cn } from "@/lib/utils";
 
-export type MondeState = { login: string; status: string; lastError: string | null; nextPage: number; totalPages: number | null; importing: boolean; createdCount: number; updatedCount: number; skippedCount: number; lastImportAt: Date | string | null } | null;
 type CsvResult = { criados: number; atualizados: number; semMudanca: number; erros: { linha: number; motivo: string }[]; avisos: { linha: number; motivo: string }[] };
 
 /** Importar clientes por planilha (CSV) ou pela API do Monde. */
@@ -32,7 +32,7 @@ export function ImportClientsButton({ monde, canMonde }: { monde: MondeState; ca
             ))}
           </div>
         )}
-        {tab === "planilha" || !canMonde ? <CsvImport /> : <MondeImport monde={monde} />}
+        {tab === "planilha" || !canMonde ? <CsvImport /> : <MondePanel monde={monde} />}
       </Modal>
     </>
   );
@@ -108,94 +108,6 @@ function CsvImport() {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function MondeImport({ monde }: { monde: MondeState }) {
-  const router = useRouter();
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<{ page: number | null; totalPages: number | null; created: number; updated: number; skipped: number } | null>(null);
-  const { run, busy } = useAction();
-
-  async function importAll(restart: boolean) {
-    setRunning(true);
-    try {
-      if (restart) {
-        const r = await run(() => restartMondeImportAction(), { success: false });
-        if (!r.ok) return;
-      }
-      for (let i = 0; i < 400; i++) {
-        const r = await run(() => importMondeBatchAction(), { success: false });
-        if (!r.ok) return;
-        setProgress(r.data);
-        if (r.data.done) {
-          toast.success(`Importação do Monde concluída: ${r.data.created} novo(s), ${r.data.updated} completado(s).`);
-          break;
-        }
-      }
-    } finally {
-      setRunning(false);
-      router.refresh();
-    }
-  }
-
-  if (!monde)
-    return (
-      <form
-        className="space-y-3 text-sm"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await run(() => connectMondeAction({ login, password }), { onSuccess: () => router.refresh() });
-        }}
-      >
-        <p className="text-slate-700">
-          Traz o cadastro dos clientes do Monde pela API oficial: nome, CPF/CNPJ, RG, nascimento, sexo, contatos, endereço e passaporte. Nacionalidade e RNE não vêm do Monde (a API não tem esses campos): marque o cliente estrangeiro no cadastro. A API do Monde <strong>não entrega as vendas nem as imagens</strong> dos documentos; as vendas antigas entram por planilha e as fotos dos documentos podem ser anexadas no cadastro de cada cliente.
-        </p>
-        <Field label="Usuário do Monde" required hint="Formato: usuario@suaagencia.monde.com.br. O usuário precisa ter acesso total no Monde.">
-          <Input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="admin@suaagencia.monde.com.br" autoComplete="off" />
-        </Field>
-        <Field label="Senha do Monde" required hint="Fica guardada criptografada e só é usada para importar.">
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
-        </Field>
-        <Button type="submit" loading={busy}>
-          Conectar ao Monde
-        </Button>
-      </form>
-    );
-
-  const p = progress ?? (monde.importing ? { page: monde.nextPage - 1, totalPages: monde.totalPages, created: monde.createdCount, updated: monde.updatedCount, skipped: monde.skippedCount } : null);
-  const pct = p?.totalPages ? Math.min(100, Math.round(((p.page ?? 0) / p.totalPages) * 100)) : 0;
-  return (
-    <div className="space-y-4 text-sm">
-      <p className="text-slate-700">
-        Conectado como <strong>{monde.login}</strong>
-        {monde.lastImportAt && <> · última importação completa em {new Date(monde.lastImportAt).toLocaleString("pt-BR")}</>}.
-      </p>
-      {monde.lastError && !running && <p className="rounded-lg bg-red-50 p-3 text-danger">{monde.lastError}</p>}
-      {p && (
-        <div className="space-y-2 rounded-lg border border-line p-4">
-          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full bg-brand-600 transition-all" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="text-ink">
-            {p.totalPages ? `Página ${p.page} de ${p.totalPages}` : "Calculando…"} · {p.created} novo(s) · {p.updated} completado(s) · {p.skipped} ignorado(s)
-          </p>
-          <p className="text-xs text-muted">O Monde permite 60 consultas por minuto; cada página traz 50 pessoas. Pode fechar esta janela e continuar depois: a importação retoma de onde parou.</p>
-        </div>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => importAll(!monde.importing)} loading={running}>
-          {!running && <RefreshCw className="h-4 w-4" />} {running ? "Importando do Monde…" : monde.importing ? "Continuar importação" : "Importar clientes do Monde"}
-        </Button>
-        <Button variant="ghost" className="text-danger" disabled={running} onClick={() => run(() => disconnectMondeAction(), { onSuccess: () => router.refresh() })}>
-          <Unplug className="h-4 w-4" /> Desconectar
-        </Button>
-        {running && <Loader2 className="h-4 w-4 animate-spin self-center text-muted" />}
-      </div>
-      <p className="text-xs text-muted">Cliente que já existe (mesmo id do Monde, CPF/CNPJ, passaporte ou e-mail) não é duplicado: só os campos vazios são completados. Usuários do Monde (agentes) não entram como clientes.</p>
     </div>
   );
 }

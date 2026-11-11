@@ -34,6 +34,8 @@ export type ImportedClient = {
   gender?: string | null;
   nationality?: string | null;
   rne?: string | null;
+  /** estrangeiro informado pela origem (o Monde marca o cadastro de estrangeiro) */
+  foreigner?: boolean;
 };
 export type ImportOutcome = "criado" | "atualizado" | "sem_mudanca";
 
@@ -66,8 +68,8 @@ function normalize(c: ImportedClient) {
   const nationality = clean(c.nationality, 60);
   const rne = normalizeDocCode(clean(c.rne, 30))?.slice(0, 20) ?? null;
   const pj = document?.length === 14;
-  // estrangeiro: tem RNE ou nacionalidade que não é brasileira (o Monde não informa nenhum dos dois)
-  const foreigner = !pj && (!!rne || (!!nationality && !isBrazilianNationality(nationality)));
+  // estrangeiro: marcado na origem, tem RNE ou nacionalidade que não é brasileira
+  const foreigner = !pj && (!!c.foreigner || !!rne || (!!nationality && !isBrazilianNationality(nationality)));
   return {
     data: {
       name: clean(c.name, 150) ?? "",
@@ -143,7 +145,7 @@ export async function upsertImportedClient(tx: Tx, ctx: Ctx, input: ImportedClie
 
 // ------------------------------ Planilha CSV ------------------------------
 
-const ALIASES: Record<keyof ImportedClient, string[]> = {
+const ALIASES: Record<Exclude<keyof ImportedClient, "foreigner">, string[]> = {
   name: ["nome", "nome completo", "cliente", "razao social", "nome/razao social"],
   tradeName: ["nome fantasia", "fantasia"],
   document: ["cpf", "cnpj", "cpf/cnpj", "cpf / cnpj", "documento", "cpf_cnpj"],
@@ -184,7 +186,7 @@ export function parseClientCsv(text: string) {
     columns: [...map.entries()].map(([i, f]) => ({ header: header[i], field: f })),
     rows: rows.map((r) => {
       const o: ImportedClient = { name: "" };
-      for (const [i, f] of map) (o as Record<string, string>)[f] = r[i] ?? "";
+      for (const [i, f] of map) (o as unknown as Record<string, string>)[f] = r[i] ?? "";
       return o;
     }),
   };
