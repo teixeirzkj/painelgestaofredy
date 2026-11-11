@@ -277,5 +277,7 @@ export const restartMondeImportAction = async () => act((ctx) => monde.restartMo
 export const importMondeBatchAction = async () => act((ctx) => monde.importMondeBatch(ctx));
 export const restartMondeSalesImportAction = async () => act((ctx) => monde.restartMondeSalesImport(ctx));
 export const importMondeSalesBatchAction = async () => act((ctx) => monde.importMondeSalesBatch(ctx));
-export const syncMondeFlightsBatchAction = async (afterId: string | null) => act((ctx) => monde.syncMondeFlightsBatch(ctx, { afterId }));
+export const syncMondeExtrasBatchAction = async (afterId: string | null) => act((ctx) => monde.syncMondeExtrasBatch(ctx, { afterId }));
+export const enableMondeWebhookAction = async () => act((ctx) => monde.enableMondeWebhook(ctx), "Atualização automática ligada.");
+export const disableMondeWebhookAction = async () => act((ctx) => monde.disableMondeWebhook(ctx), "Atualização automática desligada.");
 export const sendTestWebhookAction = async () => act((ctx) => automations.sendTestWebhook(ctx), "Evento de teste enviado ao webhook.");

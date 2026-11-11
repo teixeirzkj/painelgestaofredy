@@ -332,6 +332,7 @@ model SaleItem {
   supplierCardStartInstallment Int               @default(1) // CARTAO_AGENCIA, venda antiga: parcela em que a compra está (1 = compra nova)
   supplierCardFirstBillMonth   String? // CARTAO_AGENCIA, venda antiga: fatura (AAAA-MM) da 1ª parcela lançada
   locator                      String?
+  mondeProductId               String? // id do produto da venda no Monde (importação)
   sortOrder                    Int               @default(0)
 
   reservation Reservation?
@@ -653,7 +654,10 @@ model Attachment {
   sizeBytes    Int
   storageKey   String
   uploadedById String?
+  mondeId      String? // id do anexo no Monde (importação), para não trazer duas vezes
   createdAt    DateTime         @default(now())
+
+  @@index([companyId, mondeId])
 }
 
 model BankStatementLine {
@@ -1049,6 +1053,14 @@ model MondeIntegration {
   salesFailed       Int       @default(0)
   salesErrorsJson   String    @default("[]") // últimas falhas: [{numero, motivo}]
   salesLastImportAt DateTime?
+  // Atualização automática: webhook cadastrado na credencial do Monde
+  webhookId         String?
+  webhookKey        String?   @unique // parte secreta da URL que o Monde chama
+  webhookSecretEnc  String? // segredo da assinatura (HMAC), criptografado
+  webhookUserId     String? // usuário em nome de quem as mudanças são gravadas (quem ativou)
+  webhookEvents     String? // eventos assinados, separados por vírgula
+  lastWebhookAt     DateTime?
+  webhookError      String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 }

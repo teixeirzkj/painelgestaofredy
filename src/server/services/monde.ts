@@ -10,7 +10,7 @@
  * dos bancos. Venda importada não gera contrato novo nem avisa integrações (não marca card no CRM).
  */
 import { prisma } from "../db";
-import { assertCan, type Ctx } from "../context";
+import { assertCan, can, loadContext, type Ctx } from "../context";
 import { AppError } from "../errors";
 import { audit } from "../audit";
 import { decryptSecret, encryptSecret } from "../secrets";
@@ -18,6 +18,10 @@ import { upsertImportedClient, type ImportedClient } from "./client-import";
 import { createSale } from "./sales";
 import { settleEntryTx } from "./finance";
 import { saveMondeFlights } from "./flights";
+import { publicBaseUrl } from "./fredy";
+import { saveFile } from "../storage";
+import { gunzipSync } from "node:zlib";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { calculateSale } from "@/lib/finance";
 import type { CommercialModel, PaymentMethod, ProductType } from "@/lib/constants";
 import { ZodError } from "zod";
@@ -171,8 +175,11 @@ export async function getMonde(ctx: Ctx) {
   assertCan(ctx, "settings.manage");
   const m = await prisma.mondeIntegration.findUnique({ where: { companyId: ctx.companyId } });
   if (!m) return null;
-  const { passwordEnc: _p, salesErrorsJson, ...rest } = m;
+  // credencial, segredo e chave da URL do aviso automático nunca vão para o navegador
+  const { passwordEnc: _p, webhookSecretEnc: _s, webhookKey: _k, salesErrorsJson, ...rest } = m;
   void _p;
+  void _s;
+  void _k;
   return { ...rest, salesErrors: JSON.parse(salesErrorsJson || "[]") as SaleError[] };
 }
 
@@ -195,6 +202,7 @@ export async function connectMonde(ctx: Ctx, input: { token: string }) {
 
 export async function disconnectMonde(ctx: Ctx) {
   assertCan(ctx, "settings.manage");
+  await disableMondeWebhook(ctx).catch(() => null);
   await prisma.mondeIntegration.deleteMany({ where: { companyId: ctx.companyId } });
   await prisma.$transaction((tx) => audit(tx, ctx, "monde.desconectado", "MondeIntegration", null));
 }
@@ -323,9 +331,11 @@ export type MondeSale = {
     vendor?: Record<string, PaymentRow[] | undefined>;
   };
   commissions?: { amount?: number; balance?: number; person?: Ref }[];
+  attachments?: MondeAttachment[];
   financial?: { vendor_items?: { kind?: string; amount?: number; due_date?: string; sale_product?: Ref; bill?: Ref }[] };
 } & Partial<Record<(typeof KINDS)[number], MondeProduct[]>>;
 type SaleError = { id: string; numero: number | null; motivo: string };
+type MondeAttachment = { id: string; description?: string | null; extension?: string | null; content_type?: string | null; download_url?: string | null };
 
 const KINDS = [
   "airline_tickets",
@@ -622,15 +632,68 @@ async function importOneSale(ctx: Ctx, reader: MondeReader, mondeId: string, env
     { origin: "MONDE", externalRef: `monde:${d.id}` },
   );
 
-  // voos dos bilhetes aéreos (Central da Viagem)
-  const segments = products.filter(({ kind }) => kind === "airline_tickets").flatMap(({ p }) => (p.segments as Parameters<typeof saveMondeFlights>[3] | undefined) ?? []);
-  if (segments.length) await prisma.$transaction((tx) => saveMondeFlights(tx, ctx.companyId, r.id, segments));
+  // vínculo produto do Monde ↔ produto da venda (usado nas atualizações automáticas)
+  const saleItems = await prisma.saleItem.findMany({ where: { saleId: r.id }, orderBy: { sortOrder: "asc" }, select: { id: true } });
+  for (let i = 0; i < saleItems.length; i++) if (meta[i]) await prisma.saleItem.update({ where: { id: saleItems[i].id }, data: { mondeProductId: meta[i].mondeProductId } });
 
-  // baixa do que já está pago no Monde
+  await syncFlightsFromMonde(ctx, r.id, d);
+  await settlePaidInMonde(ctx, reader, env, r.id, d, new Map(plan.filter((p) => p.paidAt).map((p) => [p.key, p.paidAt!])));
+  await saveMondeAttachments(ctx, reader, r.id, d).catch(() => null); // anexo com problema não impede a venda
+  return "criada";
+}
+
+type ImportEnv = { accountId: string; users: { id: string; name: string }[] };
+
+/** Produtos que a importação transforma em produto da venda, na mesma ordem (ativos e com valor). */
+function importableProducts(d: MondeSale) {
+  return KINDS.flatMap((k) => d[k] ?? []).filter((p) => {
+    if (p.status && p.status !== "active") return false;
+    const t = p.totals ?? {};
+    const rav = Math.max(0, cents(t.rav_fee) - cents(t.rav_fee_discount));
+    const du = Math.max(0, cents(t.du_fee) - cents(t.du_fee_discount));
+    return cents(t.customer_amount) > 0 && cents(t.customer_amount) - rav - du > 0;
+  });
+}
+
+/** Vendas importadas antes do vínculo produto ↔ produto do Monde: liga pela ordem, se a quantidade bater. */
+async function linkMondeProducts(saleId: string, d: MondeSale) {
+  const items = await prisma.saleItem.findMany({ where: { saleId }, orderBy: { sortOrder: "asc" }, select: { id: true, mondeProductId: true } });
+  if (!items.length || items.every((i) => i.mondeProductId)) return;
+  const products = importableProducts(d);
+  if (products.length !== items.length) return;
+  for (let i = 0; i < items.length; i++) if (!items[i].mondeProductId) await prisma.saleItem.update({ where: { id: items[i].id }, data: { mondeProductId: products[i].id } });
+}
+
+/** Voos dos bilhetes aéreos ativos da venda no Monde. Com replace, refaz os que vieram do Monde (os cadastrados à mão ficam). */
+async function syncFlightsFromMonde(ctx: Ctx, saleId: string, d: MondeSale, opts: { replace?: boolean } = {}) {
+  const segments = (d.airline_tickets ?? []).filter((p) => !p.status || p.status === "active").flatMap((p) => (p.segments as Parameters<typeof saveMondeFlights>[3] | undefined) ?? []);
+  return prisma.$transaction(async (tx) => {
+    if (opts.replace) {
+      if (await tx.flightSegment.count({ where: { saleId, source: "MANUAL" } })) return 0; // a equipe ajustou os voos à mão: não mexe
+      await tx.flightSegment.deleteMany({ where: { saleId, source: "MONDE" } });
+    } else if (await tx.flightSegment.count({ where: { saleId } })) return 0;
+    return segments.length ? saveMondeFlights(tx, ctx.companyId, saleId, segments) : 0;
+  });
+}
+
+/**
+ * Dá baixa no que já está pago no Monde: parcelas do cliente (paidByKey: chave da parcela → data),
+ * fornecedor do produto (todas as contas dele liquidadas) e comissões com saldo zero. Só baixa o que está em aberto.
+ */
+async function settlePaidInMonde(ctx: Ctx, reader: MondeReader, env: Pick<ImportEnv, "accountId">, saleId: string, d: MondeSale, paidByKey: Map<string, string>) {
+  const vendorItems = (d.financial?.vendor_items ?? []).filter((v) => v.kind === "invoice");
+  const items = await prisma.saleItem.findMany({ where: { saleId }, orderBy: { sortOrder: "asc" }, select: { id: true, mondeProductId: true } });
+  const productBills = new Map<string, MondeBill[]>();
+  for (const it of items) {
+    const mine = vendorItems.filter((v) => it.mondeProductId && v.sale_product?.id === it.mondeProductId && v.bill?.id);
+    if (mine.length) productBills.set(it.id, (await Promise.all(mine.map((v) => reader.bill(v.bill!.id)))).filter(Boolean) as MondeBill[]);
+  }
+  const sellerPersonId = d.seller?.id ? (await reader.sellers()).get(d.seller.id) : undefined;
+  let count = 0;
   await prisma.$transaction(async (tx) => {
-    const settle = async (kind: "receivable" | "payable", e: { id: string; amountCents: number; settledCents: number; status: string; method?: string | null }, when: string, what: string) => {
+    const settle = async (kind: "receivable" | "payable", e: { id: string; amountCents: number; settledCents: number; status: string; method?: string | null; invoiceId?: string | null }, when: string, what: string) => {
       const balance = e.amountCents - e.settledCents;
-      if (balance <= 0 || e.status === "CANCELADO") return;
+      if (balance <= 0 || e.status === "CANCELADO" || e.invoiceId) return;
       await settleEntryTx(
         tx,
         ctx,
@@ -639,27 +702,23 @@ async function importOneSale(ctx: Ctx, reader: MondeReader, mondeId: string, env
         { date: when, amountCents: balance, interestCents: 0, discountCents: 0, accountId: env.accountId, method: e.method ?? null, notes: `Pago no Monde (${what}).` },
         { viaInvoice: false },
       );
+      count++;
     };
     // parcelas do cliente
-    const recs = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId: r.id, origin: "VENDA" } });
-    for (const p of plan) {
-      if (!p.paidAt) continue;
-      const e = recs.find((x) => x.sourceKey === `venda:${r.id}:parcela:${p.key}`);
-      if (e) await settle("receivable", e, p.paidAt, "parcela");
+    const recs = await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "VENDA" } });
+    for (const [key, when] of paidByKey) {
+      const e = recs.find((x) => x.sourceKey === `venda:${saleId}:parcela:${key}`);
+      if (e) await settle("receivable", e, when, "parcela");
     }
     // fornecedores: o produto está acertado quando todas as contas do fornecedor dele estão liquidadas no Monde
-    const saleItems = await tx.saleItem.findMany({ where: { saleId: r.id }, orderBy: { sortOrder: "asc" }, select: { id: true } });
-    const lastPaid: string[] = plan.map((p) => p.paidAt).filter(Boolean) as string[];
-    for (let i = 0; i < saleItems.length; i++) {
-      const mine = vendorItems.filter((v) => v.sale_product?.id === meta[i]?.mondeProductId && v.bill?.id);
-      if (!mine.length) continue;
-      const bills = await Promise.all(mine.map((v) => reader.bill(v.bill!.id)));
-      if (bills.some((b) => !b || b.canceled || !date(b.settlement_date))) continue;
-      const when = bills.map((b) => date(b!.settlement_date)!).sort().at(-1)!;
+    const lastPaid: string[] = [...paidByKey.values()];
+    for (const [itemId, bills] of productBills) {
+      if (!bills.length || bills.some((b) => b.canceled || !date(b.settlement_date))) continue;
+      const when = bills.map((b) => date(b.settlement_date)!).sort().at(-1)!;
       lastPaid.push(when);
       const entries = [
-        ...(await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId: r.id, saleItemId: saleItems[i].id, origin: "CUSTO_VENDA" } })).map((e) => ["payable", e] as const),
-        ...(await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId: r.id, origin: "COMISSAO_FORNECEDOR", sourceKey: { startsWith: `item:${saleItems[i].id}:` } } })).map((e) => ["receivable", e] as const),
+        ...(await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId, saleItemId: itemId, origin: "CUSTO_VENDA" } })).map((e) => ["payable", e] as const),
+        ...(await tx.receivable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "COMISSAO_FORNECEDOR", sourceKey: { startsWith: `item:${itemId}:` } } })).map((e) => ["receivable", e] as const),
       ];
       for (const [kind, e] of entries) await settle(kind, e, when, "fornecedor");
     }
@@ -670,17 +729,15 @@ async function importOneSale(ctx: Ctx, reader: MondeReader, mondeId: string, env
     };
     const when = lastPaid.sort().at(-1) ?? d.sale_date;
     if (commissionPaid(sellerPersonId)) {
-      const e = await tx.payable.findFirst({ where: { companyId: ctx.companyId, sourceKey: `comissao:${r.id}` } });
+      const e = await tx.payable.findFirst({ where: { companyId: ctx.companyId, sourceKey: `comissao:${saleId}` } });
       if (e) await settle("payable", e, when, "comissão do vendedor");
     }
     if (commissionPaid(d.intermediary?.id)) {
-      for (const e of await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId: r.id, origin: "COMISSAO_INTERMEDIARIO" } })) await settle("payable", e, when, "comissão do intermediário");
+      for (const e of await tx.payable.findMany({ where: { companyId: ctx.companyId, saleId, origin: "COMISSAO_INTERMEDIARIO" } })) await settle("payable", e, when, "comissão do intermediário");
     }
   });
-  return "criada";
+  return count;
 }
-
-type ImportEnv = { accountId: string; users: { id: string; name: string }[] };
 
 /** Cliente da venda: pelo vínculo com o Monde, pelo CPF/e-mail ou cadastrado agora. */
 async function ensureClient(ctx: Ctx, reader: MondeReader, personId: string) {
@@ -820,44 +877,268 @@ export async function importMondeSalesBatch(ctx: Ctx) {
   }
 }
 
+// ------------------------------ Anexos das vendas ------------------------------
+
+/** Tipos de arquivo trazidos do Monde. PDF e imagens abrem no navegador; os demais são baixados. */
+const ATTACHMENT_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  txt: "text/plain",
+  csv: "text/csv",
+};
+export const MONDE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Baixa um anexo do Monde. O conteúdo vem compactado em gzip sem avisar no cabeçalho (doc oficial): descompacta. */
+async function downloadMondeAttachment(token: string, a: MondeAttachment) {
+  const url = a.download_url && /^https:\/\/([a-z0-9-]+\.)*monde\.com\.br\//i.test(a.download_url) ? a.download_url : `${BASE}/attachments/${encodeURIComponent(a.id)}/download`;
+  await paced();
+  // o Monde responde 302 para um link temporário em outro domínio; o fetch não repassa o Authorization nesse redirecionamento
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, redirect: "follow", signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const len = Number(res.headers.get("content-length") ?? 0);
+  if (len > MONDE_ATTACHMENT_MAX_BYTES * 2) throw new Error("arquivo grande demais");
+  let buf: Buffer = Buffer.from(await res.arrayBuffer());
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf, { maxOutputLength: MONDE_ATTACHMENT_MAX_BYTES + 1 });
+  if (buf.length > MONDE_ATTACHMENT_MAX_BYTES) throw new Error("arquivo maior que 10 MB");
+  return buf;
+}
+
+/** Traz os anexos da venda no Monde que ainda não estão na gestão (vouchers, bilhetes, documentos). */
+async function saveMondeAttachments(ctx: Ctx, reader: MondeReader, saleId: string, d: MondeSale) {
+  const out = { saved: 0, skipped: [] as string[] };
+  const list = (d.attachments ?? []).filter((a) => a?.id).slice(0, 50);
+  if (!list.length) return out;
+  const known = new Set((await prisma.attachment.findMany({ where: { companyId: ctx.companyId, mondeId: { in: list.map((a) => a.id) } }, select: { mondeId: true } })).map((a) => a.mondeId));
+  for (const a of list) {
+    if (known.has(a.id)) continue;
+    const ext = (a.extension ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const mime = ATTACHMENT_TYPES[ext];
+    const label = (a.description || "anexo").trim().slice(0, 150);
+    if (!mime) {
+      out.skipped.push(`${label}: formato .${ext || "?"} não suportado`);
+      continue;
+    }
+    try {
+      const data = await downloadMondeAttachment(reader.token, a);
+      const storageKey = await saveFile(ctx.companyId, data, ext);
+      const fileName = label.toLowerCase().endsWith(`.${ext}`) ? label : `${label}.${ext}`;
+      await prisma.attachment.create({
+        data: { companyId: ctx.companyId, saleId, kind: /voucher/i.test(label) ? "VOUCHER" : "DOCUMENTO", fileName: fileName.slice(0, 200), mimeType: mime, sizeBytes: data.length, storageKey, uploadedById: ctx.userId, mondeId: a.id },
+      });
+      out.saved++;
+    } catch (e) {
+      out.skipped.push(`${label}: ${(e as Error).message}`.slice(0, 160));
+    }
+  }
+  return out;
+}
+
+// ------------------------------ Completar vendas já importadas ------------------------------
+
 /**
- * Busca no Monde os voos das vendas já importadas que ainda não têm voo cadastrado (vendas trazidas antes
- * da Central da Viagem), sem importar a venda de novo. A tela chama em partes até `done`, passando o
- * último id conferido.
+ * Para as vendas já trazidas do Monde: busca de novo só o que faltou (voos e anexos), sem importar a venda
+ * nem mexer no financeiro. A tela chama em partes até `done`, passando o último id conferido.
  */
-export async function syncMondeFlightsBatch(ctx: Ctx, input: { afterId?: string | null }) {
+export async function syncMondeExtrasBatch(ctx: Ctx, input: { afterId?: string | null }) {
   assertCan(ctx, "settings.manage");
   assertCan(ctx, "sales.edit_all");
   const { token } = await loadConnection(ctx);
   const reader = new MondeReader(token);
   const started = Date.now();
   let afterId = typeof input?.afterId === "string" && input.afterId ? input.afterId : null;
-  const count = { checked: 0, updated: 0, flights: 0 };
-  const where = () => ({
-    companyId: ctx.companyId,
-    origin: "MONDE",
-    externalRef: { startsWith: "monde:" },
-    items: { some: { productType: "AEREO" } },
-    flights: { none: {} },
-    ...(afterId ? { id: { gt: afterId } } : {}),
-  });
-  const finish = async (done: boolean) => ({ done, afterId: done ? null : afterId, ...count, remaining: done ? 0 : await prisma.sale.count({ where: where() }) });
+  const count = { checked: 0, flights: 0, salesWithFlights: 0, attachments: 0, skippedFiles: [] as string[] };
+  const where = () => ({ companyId: ctx.companyId, origin: "MONDE", externalRef: { startsWith: "monde:" }, ...(afterId ? { id: { gt: afterId } } : {}) });
+  const finish = async (done: boolean) => ({ done, afterId: done ? null : afterId, ...count, skippedFiles: count.skippedFiles.slice(0, 50), remaining: done ? 0 : await prisma.sale.count({ where: where() }) });
   while (Date.now() - started < BATCH_BUDGET_MS()) {
-    const sales = await prisma.sale.findMany({ where: where(), orderBy: { id: "asc" }, take: 20, select: { id: true, externalRef: true } });
+    const sales = await prisma.sale.findMany({ where: where(), orderBy: { id: "asc" }, take: 20, select: { id: true, code: true, externalRef: true } });
     if (!sales.length) return finish(true);
     for (const s of sales) {
       if (Date.now() - started > BATCH_BUDGET_MS()) return finish(false);
       const d = (await reader.get(`/sales/${s.externalRef!.slice("monde:".length)}`)) as MondeSale | null;
       afterId = s.id;
       count.checked++;
-      const segments = (d?.airline_tickets ?? []).filter((p) => !p.status || p.status === "active").flatMap((p) => (p.segments as Parameters<typeof saveMondeFlights>[3] | undefined) ?? []);
-      if (!segments.length) continue;
-      const n = await prisma.$transaction((tx) => saveMondeFlights(tx, ctx.companyId, s.id, segments));
+      if (!d) continue;
+      await linkMondeProducts(s.id, d);
+      const n = await syncFlightsFromMonde(ctx, s.id, d);
       if (n) {
-        count.updated++;
         count.flights += n;
+        count.salesWithFlights++;
       }
+      const a = await saveMondeAttachments(ctx, reader, s.id, d);
+      count.attachments += a.saved;
+      count.skippedFiles.push(...a.skipped.map((x) => `${s.code} · ${x}`));
     }
   }
   return finish(false);
+}
+
+// ------------------------------ Atualização automática (webhook do Monde) ------------------------------
+
+async function mondeSend<T = Obj>(token: string, method: "POST" | "DELETE", path: string, body?: unknown): Promise<T | null> {
+  await paced();
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": "application/json", ...(method === "POST" ? { "Idempotency-Key": randomUUID() } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (res.status === 404 && method === "DELETE") return null;
+  if (!res.ok) {
+    const why = ((await res.json().catch(() => null)) as { errors?: string[] } | null)?.errors?.[0];
+    if (res.status === 403) throw new AppError(`O Monde negou${why ? `: ${why}` : ""}. Na credencial, marque a permissão "Webhooks".`);
+    throw new AppError(`O Monde respondeu com erro ${res.status}${why ? `: ${why}` : ""}.`);
+  }
+  return res.status === 204 ? null : ((await res.json().catch(() => null)) as T | null);
+}
+
+const WANTED_EVENTS = ["sales.changed", "sales.closed", "bills.changed"];
+
+/** Liga a atualização automática: cadastra no Monde um webhook que avisa a gestão a cada venda alterada. */
+export async function enableMondeWebhook(ctx: Ctx) {
+  assertCan(ctx, "settings.manage");
+  assertCan(ctx, "sales.edit_all");
+  assertCan(ctx, "finance.manage");
+  const { m, token } = await loadConnection(ctx);
+  const base = publicBaseUrl();
+  if (!base) throw new AppError("O endereço público do sistema não está configurado (APP_URL).");
+  const catalog = await mondeGet<{ data?: { name: string; subscribable?: boolean }[] }>(token, "/webhook_events");
+  const events = WANTED_EVENTS.filter((e) => catalog?.data?.some((x) => x.name === e && x.subscribable !== false));
+  if (!events.includes("sales.changed")) throw new AppError('A credencial não pode assinar avisos de vendas. No Monde, marque a permissão "Webhooks" e "Visualizar" em Vendas.');
+  if (m.webhookId) await mondeSend(token, "DELETE", `/webhooks/${m.webhookId}`).catch(() => null);
+  const key = randomBytes(24).toString("hex");
+  const secret = randomBytes(32).toString("hex");
+  const created = await mondeSend<{ id?: string }>(token, "POST", "/webhooks", { url: `${base}/api/integracoes/monde/webhook/${key}`, description: "Frédy Gestão · atualização automática", events, active: true, secret });
+  if (!created?.id) throw new AppError("O Monde não confirmou o cadastro do aviso automático.");
+  await prisma.mondeIntegration.update({
+    where: { companyId: ctx.companyId },
+    data: { webhookId: created.id, webhookKey: key, webhookSecretEnc: encryptSecret(secret), webhookUserId: ctx.userId, webhookEvents: events.join(","), webhookError: null },
+  });
+  await prisma.$transaction((tx) => audit(tx, ctx, "monde.atualizacao_automatica_ligada", "MondeIntegration", null, { events }));
+  return { events };
+}
+
+export async function disableMondeWebhook(ctx: Ctx) {
+  assertCan(ctx, "settings.manage");
+  const m = await prisma.mondeIntegration.findUnique({ where: { companyId: ctx.companyId } });
+  if (!m?.webhookId) return;
+  try {
+    const { token } = await loadConnection(ctx);
+    await mondeSend(token, "DELETE", `/webhooks/${m.webhookId}`);
+  } catch {
+    // sem acesso ao Monde: a gestão para de aceitar os avisos mesmo assim (a chave da URL é apagada)
+  }
+  await prisma.mondeIntegration.update({ where: { companyId: ctx.companyId }, data: { webhookId: null, webhookKey: null, webhookSecretEnc: null, webhookUserId: null, webhookEvents: null } });
+  await prisma.$transaction((tx) => audit(tx, ctx, "monde.atualizacao_automatica_desligada", "MondeIntegration", null));
+}
+
+/** Confere a assinatura do aviso: HMAC-SHA256 de "<timestamp>.<corpo cru>" com o segredo, e recusa aviso antigo. */
+export function verifyMondeSignature(secret: string, timestamp: string | null, signature: string | null, raw: string, nowMs = Date.now()) {
+  if (!timestamp || !signature || !/^\d{9,12}$/.test(timestamp)) return false;
+  if (Math.abs(nowMs / 1000 - Number(timestamp)) > 6 * 3600) return false; // as novas tentativas do Monde vão até umas 2 h
+  const expected = `sha256=${createHmac("sha256", secret).update(`${timestamp}.${raw}`).digest("hex")}`;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature.trim());
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Integração dona da chave da URL, com o segredo para conferir a assinatura. */
+export async function mondeWebhookTarget(key: string) {
+  if (!/^[a-f0-9]{48}$/.test(key)) return null;
+  const m = await prisma.mondeIntegration.findUnique({ where: { webhookKey: key } });
+  if (!m?.webhookSecretEnc) return null;
+  return { companyId: m.companyId, secret: decryptSecret(m.webhookSecretEnc) };
+}
+
+type WebhookBody = { event?: string; resource?: string; data?: { id?: string; company_id?: string | null }[] };
+
+/**
+ * Processa um aviso do Monde (depois de responder 200 ao Monde). Venda nova entra pela importação; venda já
+ * importada atualiza voos, anexos e baixas do que foi pago. Mudança de produtos ou valores não é aplicada
+ * sozinha (mexeria no financeiro): fica um aviso nas observações da venda para conferir.
+ */
+export async function handleMondeWebhook(companyId: string, body: WebhookBody) {
+  const m = await prisma.mondeIntegration.findUnique({ where: { companyId } });
+  if (!m?.webhookUserId) return;
+  const ctx = await loadContext(m.webhookUserId);
+  const ok = ctx && ["sales.create", "sales.edit_all", "finance.manage", "settings.manage"].every((p) => can(ctx, p as never));
+  if (!ctx || !ok) {
+    await prisma.mondeIntegration.update({ where: { companyId }, data: { webhookError: "Quem ligou a atualização automática não tem mais acesso. Desligue e ligue de novo com um administrador.", lastWebhookAt: new Date() } });
+    return;
+  }
+  let token: string;
+  try {
+    ({ token } = await loadConnection(ctx));
+  } catch (e) {
+    await prisma.mondeIntegration.update({ where: { companyId }, data: { webhookError: (e as Error).message, lastWebhookAt: new Date() } });
+    return;
+  }
+  const reader = new MondeReader(token);
+  const env: ImportEnv = { accountId: await importAccount(ctx), users: await prisma.user.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }) };
+  const ids = [...new Set((body.data ?? []).map((x) => x?.id).filter((x): x is string => typeof x === "string" && x.length < 100))].slice(0, 100);
+  let error: string | null = null;
+  for (const id of ids) {
+    try {
+      let saleMondeId: string | null = id;
+      if (body.resource === "bills") {
+        const bill = (await reader.get(`/bills/${id}`)) as (MondeBill & { sale?: Ref }) | null;
+        saleMondeId = bill?.sale?.id ?? null;
+      }
+      if (!saleMondeId) continue;
+      await refreshMondeSale(ctx, reader, env, saleMondeId);
+    } catch (e) {
+      error = `${body.event ?? "aviso"} ${id}: ${(e instanceof Error ? e.message : "erro").slice(0, 200)}`;
+    }
+  }
+  await prisma.mondeIntegration.update({ where: { companyId }, data: { lastWebhookAt: new Date(), webhookError: error } });
+}
+
+const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+/** Atualiza (ou importa, se for nova) uma venda do Monde. */
+export async function refreshMondeSale(ctx: Ctx, reader: MondeReader, env: ImportEnv, mondeId: string) {
+  const sale = await prisma.sale.findFirst({ where: { companyId: ctx.companyId, externalRef: `monde:${mondeId}` }, select: { id: true, notes: true, status: true, grossCents: true, feesCents: true, discountCents: true } });
+  const d = (await reader.get(`/sales/${mondeId}`)) as MondeSale | null;
+  if (!sale) {
+    if (!d || (d.status && !["opened", "closed"].includes(d.status))) return "ignorada";
+    return importOneSale(ctx, reader, mondeId, env);
+  }
+  const notes: string[] = [];
+  const stamp = new Date().toLocaleDateString("pt-BR", { timeZone: ctx.timezone });
+  if (!d || d.status === "canceled") {
+    if (sale.status !== "CANCELADA" && !(sale.notes ?? "").includes("cancelada no Monde")) notes.push(`⚠ Venda cancelada no Monde (aviso de ${stamp}): confira e cancele aqui se for o caso.`);
+  } else {
+    await linkMondeProducts(sale.id, d);
+    await syncFlightsFromMonde(ctx, sale.id, d, { replace: true });
+    await saveMondeAttachments(ctx, reader, sale.id, d).catch(() => null);
+    // parcelas pagas no Monde desde a importação
+    const recs = await prisma.receivable.findMany({ where: { companyId: ctx.companyId, saleId: sale.id, origin: "VENDA", status: { in: ["PENDENTE", "PARCIAL"] } }, select: { sourceKey: true } });
+    const paid = new Map<string, string>();
+    for (const r of recs) {
+      const key = r.sourceKey?.split(":parcela:")[1];
+      const billId = key?.startsWith("fat-") ? key.slice(4) : key;
+      // parcelas sem conta no Monde (crédito, retido, legado ou criada pela gestão) não têm o que conferir
+      if (!key || !billId || /^(c-|l-|monde-)/.test(key) || !/^[A-Za-z0-9-]{1,64}$/.test(billId)) continue;
+      const b = await reader.bill(billId);
+      if (b && !b.canceled && date(b.settlement_date)) paid.set(key, date(b.settlement_date)!);
+    }
+    await settlePaidInMonde(ctx, reader, env, sale.id, d, paid);
+    // valores mudaram no Monde: avisa para conferir (não muda o financeiro sozinho)
+    const mondeTotal = KINDS.flatMap((k) => (d[k] ?? []).filter((p) => !p.status || p.status === "active")).reduce((a, p) => a + cents(p.totals?.customer_amount), 0);
+    const ours = sale.grossCents - sale.feesCents + sale.discountCents;
+    const msg = `⚠ Valores alterados no Monde: produtos somam ${brl(mondeTotal)} lá e ${brl(ours)} aqui. Confira e ajuste a venda.`;
+    if (mondeTotal > 0 && Math.abs(mondeTotal - ours) > 100 && !(sale.notes ?? "").includes(msg)) notes.push(msg);
+  }
+  if (notes.length) {
+    await prisma.sale.update({ where: { id: sale.id }, data: { notes: [sale.notes, ...notes].filter(Boolean).join("\n").slice(0, 4000) } });
+    await prisma.$transaction((tx) => audit(tx, ctx, "venda.alterada_no_monde", "Sale", sale.id, { avisos: notes }));
+  }
+  return "atualizada";
 }

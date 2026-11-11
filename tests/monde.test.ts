@@ -1,8 +1,11 @@
 /** Monde (API v3): conexão, clientes e vendas com o financeiro. API simulada; nenhuma chamada real. */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/server/db";
-import { syncMondeFlightsBatch, connectMonde, importMondeBatch, importMondeSalesBatch, mapMondePerson, mapPaymentMethod, restartMondeImport, restartMondeSalesImport, IMPORT_ACCOUNT_NAME } from "@/server/services/monde";
+import { syncMondeExtrasBatch, enableMondeWebhook, handleMondeWebhook, verifyMondeSignature, connectMonde, importMondeBatch, importMondeSalesBatch, mapMondePerson, mapPaymentMethod, restartMondeImport, restartMondeSalesImport, IMPORT_ACCOUNT_NAME } from "@/server/services/monde";
 import { makeCompany } from "./helpers";
+import { gzipSync } from "node:zlib";
+import { createHmac } from "node:crypto";
+import { readStoredFile } from "@/server/storage";
 
 const TOKEN = "credencial-de-teste-1234567890";
 const people: Record<string, object> = {
@@ -12,13 +15,13 @@ const people: Record<string, object> = {
   "p-op": { id: "p-op", person_kind: "company", name: "Operadora Monde", legal_name: "Operadora Monde Ltda", cpf_cnpj: "11444777000161" },
   "p-for": { id: "p-for", person_kind: "individual", name: "John Smith", foreigner: true, foreign_identity_document: "V123456-7", passport_number: "X1234567" },
 };
-const bills: Record<string, object> = {
+const bills: Record<string, Record<string, unknown>> = {
   b1: { id: "b1", amount: 2500, due_date: "2026-10-05", settlement_date: "2026-10-05", canceled: false, payment_method: { id: "pm-pix" } },
-  b2: { id: "b2", amount: 2500, due_date: "2026-11-10", settlement_date: null, canceled: false, payment_method: { id: "pm-cc" } },
+  b2: { id: "b2", amount: 2500, due_date: "2026-11-10", settlement_date: null as string | null, canceled: false, payment_method: { id: "pm-cc" }, sale: { id: "v1" } },
   b3: { id: "b3", amount: 1100, due_date: "2026-12-01", settlement_date: null, canceled: false, payment_method: { id: "pm-pix" } },
   vb1: { id: "vb1", amount: 4500, due_date: "2026-11-30", settlement_date: "2026-11-01", canceled: false },
 };
-const sales: Record<string, object> = {
+const sales: Record<string, Record<string, unknown>> = {
   v1: {
     id: "v1",
     sale_number: 101,
@@ -47,6 +50,10 @@ const sales: Record<string, object> = {
     payments: { agency: { bills: [{ id: "b1" }, { id: "b2" }] }, vendor: { credit_card: [{ id: "vc1", products: [{ sale_product: { id: "pa1" }, amount: 1200 }] }] } },
     commissions: [{ amount: 150, balance: 0, person: { id: "p-sell" } }],
     financial: { vendor_items: [{ kind: "invoice", amount: 4500, due_date: "2026-11-30", sale_product: { id: "pp1" }, bill: { id: "vb1" } }] },
+    attachments: [
+      { id: "att1", description: "Voucher hotel", extension: "pdf", content_type: "application/pdf", download_url: "https://web.monde.com.br/api/v3/attachments/att1/download" },
+      { id: "att2", description: "programa", extension: "exe" },
+    ],
   },
   v2: { id: "v2", sale_number: 102, sale_date: "2026-10-02", payer: { id: "p-cli" }, hotels: [{ id: "h1", status: "canceled", totals: { customer_amount: 900 } }] },
   v3: {
@@ -57,9 +64,19 @@ const sales: Record<string, object> = {
     travel_packages: [{ id: "pp3", status: "active", package_name: "Gramado", totals: { customer_amount: 1000 }, commission_amount: 100, supplier: { id: "p-op" } }],
     payments: { agency: { bills: [{ id: "b3" }] } },
   },
+  v5: {
+    id: "v5",
+    sale_number: 105,
+    sale_date: "2026-11-05",
+    status: "opened",
+    payer: { id: "p-cli" },
+    travel_packages: [{ id: "pp5", status: "active", package_name: "Bariloche", totals: { customer_amount: 3000 }, commission_amount: 300, supplier: { id: "p-op" } }],
+    payments: { agency: { bills: [] } },
+  },
   v4: { id: "v4", sale_number: 104, sale_date: "2026-10-04", travel_packages: [{ id: "pp4", status: "active", totals: { customer_amount: 700 } }] },
 };
 
+const webhookCalls: Record<string, unknown>[] = [];
 function fakeMonde() {
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
   const page = (data: unknown[], next: string | null = null) => json({ data, pagination: { size: 20, has_next_page: !!next, next_cursor: next } });
@@ -70,6 +87,12 @@ function fakeMonde() {
     const path = url.pathname.replace("/api/v3", "");
     const cursor = url.searchParams.get("cursor");
     if (path === "/companies") return page([{ id: "e1", name: "Agência Monde" }]);
+    if (path === "/attachments/att1/download") return new Response(new Uint8Array(gzipSync(Buffer.from("%PDF-1.4 voucher de teste"))), { status: 200 }); // gzip sem Content-Encoding, como o Monde
+    if (path === "/webhook_events") return json({ data: [{ name: "sales.changed", subscribable: true }, { name: "sales.closed", subscribable: true }, { name: "bills.changed", subscribable: true }] });
+    if (path === "/webhooks" && init?.method === "POST") {
+      webhookCalls.push(JSON.parse(String(init.body)));
+      return new Headers(init.headers).get("idempotency-key") ? json({ id: "wh1", ...JSON.parse(String(init.body)) }, 201) : json({ errors: ["falta Idempotency-Key"] }, 422);
+    }
     if (path === "/sellers") return page([{ id: "s1", person: { id: "p-sell" } }]);
     if (path === "/payment_methods") return page([{ id: "pm-pix", name: "PIX" }, { id: "pm-cc", name: "Cartão de Crédito" }]);
     if (path === "/cities/c1") return json({ id: "c1", name: "Curitiba", state: { acronym: "PR" } });
@@ -172,17 +195,68 @@ describe("Monde (API v3)", () => {
     expect(await prisma.sale.count({ where: { companyId: env.company.id, origin: "MONDE" } })).toBe(2);
   });
 
-  it("busca os voos das vendas já importadas sem importar de novo", async () => {
+  it("traz os anexos na importação (descompactando) e ignora formato não suportado", async () => {
     const s1 = await prisma.sale.findFirstOrThrow({ where: { companyId: env.company.id, externalRef: "monde:v1" } });
-    await prisma.flightSegment.deleteMany({ where: { saleId: s1.id } }); // como uma venda trazida antes da Central da Viagem
+    const atts = await prisma.attachment.findMany({ where: { saleId: s1.id } });
+    expect(atts.map((x) => [x.fileName, x.mimeType, x.kind, x.mondeId])).toEqual([["Voucher hotel.pdf", "application/pdf", "VOUCHER", "att1"]]);
+    expect((await readStoredFile(atts[0].storageKey)).toString()).toBe("%PDF-1.4 voucher de teste");
+  });
+
+  it("completa as vendas já importadas (voos e anexos) sem importar de novo", async () => {
+    const s1 = await prisma.sale.findFirstOrThrow({ where: { companyId: env.company.id, externalRef: "monde:v1" } });
+    await prisma.flightSegment.deleteMany({ where: { saleId: s1.id } }); // como uma venda trazida antes destas melhorias
+    await prisma.attachment.deleteMany({ where: { saleId: s1.id } });
     const salesBefore = await prisma.sale.count({ where: { companyId: env.company.id } });
-    const r = await syncMondeFlightsBatch(env.admin, { afterId: null });
-    expect(r).toMatchObject({ done: true, updated: 1, flights: 1, remaining: 0 });
-    expect(await prisma.flightSegment.count({ where: { saleId: s1.id } })).toBe(1);
+    const r = await syncMondeExtrasBatch(env.admin, { afterId: null });
+    expect(r).toMatchObject({ done: true, flights: 1, salesWithFlights: 1, attachments: 1 });
+    expect(r.skippedFiles.join()).toMatch(/programa: formato .exe/);
     expect(await prisma.sale.count({ where: { companyId: env.company.id } })).toBe(salesBefore);
-    // de novo: já tem voo, nada a buscar
-    expect(await syncMondeFlightsBatch(env.admin, { afterId: null })).toMatchObject({ done: true, checked: 0, flights: 0 });
-    await expect(syncMondeFlightsBatch(env.seller, { afterId: null })).rejects.toThrow();
+    // de novo: nada a trazer
+    expect(await syncMondeExtrasBatch(env.admin, { afterId: null })).toMatchObject({ done: true, flights: 0, attachments: 0 });
+    await expect(syncMondeExtrasBatch(env.seller, { afterId: null })).rejects.toThrow();
+  });
+
+  it("confere a assinatura do aviso do Monde", () => {
+    const raw = JSON.stringify({ event: "sales.changed", data: [{ id: "v1" }] });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = "sha256=" + createHmac("sha256", "segredo").update(`${ts}.${raw}`).digest("hex");
+    expect(verifyMondeSignature("segredo", ts, sig, raw)).toBe(true);
+    expect(verifyMondeSignature("outro", ts, sig, raw)).toBe(false);
+    expect(verifyMondeSignature("segredo", ts, sig, raw + " ")).toBe(false);
+    expect(verifyMondeSignature("segredo", String(Number(ts) - 3 * 86400), sig, raw)).toBe(false);
+    expect(verifyMondeSignature("segredo", null, sig, raw)).toBe(false);
+  });
+
+  it("atualização automática: liga no Monde, importa venda nova, dá baixa no que foi pago e avisa mudança de valor", async () => {
+    process.env.APP_URL = "https://gestao.exemplo.com.br";
+    const r = await enableMondeWebhook(env.admin);
+    expect(r.events).toEqual(["sales.changed", "sales.closed", "bills.changed"]);
+    const m = await prisma.mondeIntegration.findUniqueOrThrow({ where: { companyId: env.company.id } });
+    expect(webhookCalls.at(-1)).toMatchObject({ url: `https://gestao.exemplo.com.br/api/integracoes/monde/webhook/${m.webhookKey}`, active: true });
+    expect(m.webhookSecretEnc).not.toContain(String(webhookCalls.at(-1)!.secret));
+
+    // venda nova no Monde entra sozinha
+    await handleMondeWebhook(env.company.id, { event: "sales.changed", resource: "sales", data: [{ id: "v5" }] });
+    expect(await prisma.sale.findFirst({ where: { companyId: env.company.id, externalRef: "monde:v5" } })).not.toBeNull();
+
+    // parcela paga no Monde depois da importação
+    bills.b2.settlement_date = "2026-11-10";
+    await handleMondeWebhook(env.company.id, { event: "bills.changed", resource: "bills", data: [{ id: "b2" }] });
+    const s1 = await prisma.sale.findFirstOrThrow({ where: { companyId: env.company.id, externalRef: "monde:v1" } });
+    const b2 = await prisma.receivable.findFirstOrThrow({ where: { saleId: s1.id, sourceKey: `venda:${s1.id}:parcela:b2` } });
+    expect(b2.status).toBe("PAGO");
+
+    // valor mudou no Monde: não mexe no financeiro, deixa aviso (uma vez só)
+    const pkg = (sales.v1.travel_packages as { totals: { customer_amount: number } }[])[0];
+    pkg.totals.customer_amount = 5500;
+    await handleMondeWebhook(env.company.id, { event: "sales.changed", resource: "sales", data: [{ id: "v1" }] });
+    await handleMondeWebhook(env.company.id, { event: "sales.changed", resource: "sales", data: [{ id: "v1" }] });
+    const after = await prisma.sale.findUniqueOrThrow({ where: { id: s1.id } });
+    expect(after.grossCents).toBe(s1.grossCents);
+    expect(after.notes!.match(/Valores alterados no Monde/g)).toHaveLength(1);
+    pkg.totals.customer_amount = 5000;
+    expect((await prisma.mondeIntegration.findUniqueOrThrow({ where: { companyId: env.company.id } })).webhookError).toBeNull();
+    delete process.env.APP_URL;
   });
 
   it("traduz formas de pagamento e pessoas", () => {

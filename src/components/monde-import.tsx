@@ -14,7 +14,9 @@ import {
   importMondeSalesBatchAction,
   restartMondeImportAction,
   restartMondeSalesImportAction,
-  syncMondeFlightsBatchAction,
+  syncMondeExtrasBatchAction,
+  enableMondeWebhookAction,
+  disableMondeWebhookAction,
 } from "@/app/actions";
 
 export type MondeState = {
@@ -33,6 +35,10 @@ export type MondeState = {
   salesFailed: number;
   salesErrors: { id: string; numero: number | null; motivo: string }[];
   salesLastImportAt: Date | string | null;
+  webhookId: string | null;
+  webhookEvents: string | null;
+  lastWebhookAt: Date | string | null;
+  webhookError: string | null;
 } | null;
 
 /** Botão da tela de vendas: abre a conexão e a importação do Monde. */
@@ -99,7 +105,12 @@ export function MondePanel({ monde }: { monde: MondeState }) {
       {monde.lastError && <p className="rounded-lg bg-red-50 p-3 text-danger">{monde.lastError}</p>}
       <ClientsSection monde={monde} />
       <SalesSection monde={monde} />
-      {monde.salesCreated > 0 || monde.salesLastImportAt ? <FlightsSyncSection /> : null}
+      {monde.salesCreated > 0 || monde.salesLastImportAt ? (
+        <>
+          <ExtrasSyncSection />
+          <AutoUpdateSection monde={monde} />
+        </>
+      ) : null}
       <p className="text-xs text-muted">
         O Monde permite 10 consultas a cada 3 segundos, então importações grandes levam um tempo. Pode fechar esta janela e continuar depois: a importação retoma de onde parou e nada é duplicado.
       </p>
@@ -224,28 +235,30 @@ function SalesSection({ monde }: { monde: NonNullable<MondeState> }) {
   );
 }
 
-/** Voos das vendas importadas antes da Central da Viagem: busca no Monde só os trechos, sem importar a venda de novo. */
-function FlightsSyncSection() {
+/** Vendas já importadas: busca no Monde o que faltou (voos e anexos), sem importar a venda de novo. */
+function ExtrasSyncSection() {
   const router = useRouter();
   const { run } = useAction();
   const [running, setRunning] = useState(false);
-  const [p, setP] = useState<{ checked: number; updated: number; flights: number; remaining: number } | null>(null);
+  const [p, setP] = useState<{ checked: number; flights: number; salesWithFlights: number; attachments: number; remaining: number; skippedFiles: string[] } | null>(null);
   async function go() {
     setRunning(true);
-    const total = { checked: 0, updated: 0, flights: 0, remaining: 0 };
+    const total = { checked: 0, flights: 0, salesWithFlights: 0, attachments: 0, remaining: 0, skippedFiles: [] as string[] };
     let afterId: string | null = null;
     try {
-      for (let i = 0; i < 2000; i++) {
-        const r = await run(() => syncMondeFlightsBatchAction(afterId), { success: false, refresh: false });
+      for (let i = 0; i < 5000; i++) {
+        const r = await run(() => syncMondeExtrasBatchAction(afterId), { success: false, refresh: false });
         if (!r.ok) return;
         total.checked += r.data.checked;
-        total.updated += r.data.updated;
         total.flights += r.data.flights;
+        total.salesWithFlights += r.data.salesWithFlights;
+        total.attachments += r.data.attachments;
         total.remaining = r.data.remaining;
-        setP({ ...total });
+        total.skippedFiles.push(...r.data.skippedFiles);
+        setP({ ...total, skippedFiles: [...total.skippedFiles] });
         afterId = r.data.afterId;
         if (r.data.done) {
-          toast.success(total.flights ? `${total.flights} voo(s) trazido(s) do Monde para ${total.updated} venda(s).` : "Nenhum voo novo encontrado no Monde.");
+          toast.success(`Vendas completadas: ${total.flights} voo(s) e ${total.attachments} anexo(s) trazidos do Monde.`);
           break;
         }
       }
@@ -256,20 +269,64 @@ function FlightsSyncSection() {
   }
   return (
     <section className="space-y-2 rounded-lg border border-line p-4">
-      <h3 className="font-semibold text-ink">Voos das vendas já importadas</h3>
+      <h3 className="font-semibold text-ink">Completar vendas já importadas</h3>
       <p className="text-slate-700">
-        Para a Central da Viagem: busca no Monde os voos (companhia, número, trechos e horários) das vendas com passagem aérea que ainda estão sem voo na gestão. Não importa a venda de novo nem mexe no financeiro.
+        Busca no Monde o que ainda não veio para as vendas já importadas: os <strong>voos</strong> (para a Central da Viagem) e os <strong>anexos</strong> (vouchers, bilhetes e documentos, até 10 MB cada). Não importa a venda de novo, não
+        mexe no financeiro e não duplica nada. Pode rodar quantas vezes quiser.
       </p>
       {p && (
         <p className="text-ink">
-          {p.checked} venda(s) conferida(s) · {p.flights} voo(s) em {p.updated} venda(s)
+          {p.checked} venda(s) conferida(s) · {p.flights} voo(s) em {p.salesWithFlights} venda(s) · {p.attachments} anexo(s)
           {running && p.remaining > 0 ? ` · faltam ${p.remaining}` : ""}
-          {!running && p.checked > p.updated ? ` · ${p.checked - p.updated} sem trecho completo no Monde (cadastre o voo na venda)` : ""}
         </p>
       )}
+      {p && !running && p.skippedFiles.length > 0 && (
+        <details className="rounded-lg bg-amber-50 p-3 text-amber-900">
+          <summary className="cursor-pointer font-medium">Anexos que não vieram ({p.skippedFiles.length})</summary>
+          <ul className="mt-2 max-h-48 space-y-1 overflow-auto text-xs">
+            {p.skippedFiles.map((x, i) => (
+              <li key={i}>{x}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       <Button variant="outline" onClick={go} loading={running}>
-        {!running && <RefreshCw className="h-4 w-4" />} {running ? "Buscando voos…" : "Buscar voos no Monde"}
+        {!running && <RefreshCw className="h-4 w-4" />} {running ? "Buscando no Monde…" : "Buscar voos e anexos no Monde"}
       </Button>
+    </section>
+  );
+}
+
+/** Aviso automático do Monde: cada venda alterada lá chega na gestão sozinha. */
+function AutoUpdateSection({ monde }: { monde: NonNullable<MondeState> }) {
+  const router = useRouter();
+  const { run, busy } = useAction();
+  const on = !!monde.webhookId;
+  return (
+    <section className="space-y-2 rounded-lg border border-line p-4">
+      <h3 className="flex items-center gap-2 font-semibold text-ink">
+        Atualização automática
+        <span className={on ? "rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700" : "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-muted"}>{on ? "Ligada" : "Desligada"}</span>
+      </h3>
+      <p className="text-slate-700">
+        O Monde avisa a gestão toda vez que uma venda muda lá. <strong>Venda nova</strong> entra sozinha, com o financeiro. Na <strong>venda já importada</strong>, a gestão atualiza os voos, traz os anexos novos e dá baixa no que foi pago no
+        Monde. Se mudarem produtos ou valores, ou se a venda for cancelada lá, a gestão <strong>não muda o financeiro sozinha</strong>: deixa um aviso nas observações da venda para alguém conferir.
+      </p>
+      {on && (
+        <p className="text-xs text-muted">
+          {monde.lastWebhookAt ? `Último aviso recebido em ${new Date(monde.lastWebhookAt).toLocaleString("pt-BR")}.` : "Nenhum aviso recebido ainda: altere uma venda no Monde para testar (o Monde junta os avisos a cada minuto)."}
+        </p>
+      )}
+      {monde.webhookError && <p className="rounded-lg bg-red-50 p-3 text-xs text-danger">{monde.webhookError}</p>}
+      {on ? (
+        <Button variant="ghost" className="text-danger" loading={busy} onClick={() => run(() => disableMondeWebhookAction(), { onSuccess: () => router.refresh() })}>
+          Desligar atualização automática
+        </Button>
+      ) : (
+        <Button loading={busy} onClick={() => run(() => enableMondeWebhookAction(), { onSuccess: () => router.refresh() })}>
+          Ligar atualização automática
+        </Button>
+      )}
     </section>
   );
 }
