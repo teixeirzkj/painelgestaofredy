@@ -36,6 +36,10 @@ export type ImportedClient = {
   rne?: string | null;
   /** estrangeiro informado pela origem (o Monde marca o cadastro de estrangeiro) */
   foreigner?: boolean;
+  /** razão social (planilha do Monde: vem separada do nome) */
+  legalName?: string | null;
+  /** CNPJ em coluna própria (planilha do Monde tem CPF e CNPJ separados) */
+  cnpj?: string | null;
 };
 export type ImportOutcome = "criado" | "atualizado" | "sem_mudanca";
 
@@ -48,6 +52,11 @@ const clean = (v: unknown, max: number) => {
 export function parseDate(v: unknown): string | null {
   const s = clean(v, 40);
   if (!s) return null;
+  // número de série de data do Excel (dias desde 30/12/1899), como vem do .xlsx
+  if (/^\d{4,5}(\.\d+)?$/.test(s) && +s > 1000 && +s < 80000) {
+    const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(+s) * 86_400_000);
+    return valid(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return valid(+m[1], +m[2], +m[3]);
   m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
@@ -60,7 +69,16 @@ function valid(y: number, mo: number, d: number) {
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-function normalize(c: ImportedClient) {
+function normalize(input: ImportedClient) {
+  const c = { ...input };
+  // CPF e CNPJ em colunas separadas: usa o que estiver preenchido
+  if (!onlyDigits(c.document) && onlyDigits(c.cnpj)) c.document = c.cnpj;
+  const legal = clean(c.legalName, 150);
+  if (legal && onlyDigits(c.document)?.length === 14) {
+    // empresa: o nome oficial é a razão social; o nome usado no dia a dia vira o nome fantasia
+    if (!clean(c.tradeName, 150) && clean(c.name, 150) && clean(c.name, 150) !== legal) c.tradeName = c.name;
+    c.name = legal;
+  } else if (legal && !clean(c.name, 150)) c.name = legal;
   const digits = onlyDigits(c.document);
   const document = digits && isValidDocument(digits) ? digits : null;
   const email = clean(c.email, 150)?.toLowerCase() ?? null;
@@ -146,11 +164,13 @@ export async function upsertImportedClient(tx: Tx, ctx: Ctx, input: ImportedClie
 // ------------------------------ Planilha CSV ------------------------------
 
 const ALIASES: Record<Exclude<keyof ImportedClient, "foreigner">, string[]> = {
-  name: ["nome", "nome completo", "cliente", "razao social", "nome/razao social"],
+  name: ["nome", "nome completo", "cliente", "nome/razao social"],
+  legalName: ["razao social"],
+  cnpj: ["cnpj"],
   tradeName: ["nome fantasia", "fantasia"],
-  document: ["cpf", "cnpj", "cpf/cnpj", "cpf / cnpj", "documento", "cpf_cnpj"],
+  document: ["cpf", "cpf/cnpj", "cpf / cnpj", "documento", "cpf_cnpj"],
   rg: ["rg", "identidade"],
-  birthDate: ["nascimento", "data de nascimento", "data nascimento", "aniversario", "dt nascimento"],
+  birthDate: ["nascimento", "data de nascimento", "data nascimento", "aniversario", "dt nascimento", "nascimento (fundacao)", "data de nascimento (fundacao)"],
   email: ["email", "e-mail", "e mail"],
   phone: ["telefone", "fone", "telefone fixo", "tel"],
   whatsapp: ["whatsapp", "celular", "telefone celular", "cel", "whats"],
@@ -161,12 +181,12 @@ const ALIASES: Record<Exclude<keyof ImportedClient, "foreigner">, string[]> = {
   district: ["bairro"],
   city: ["cidade", "municipio"],
   state: ["estado", "uf"],
-  passportNumber: ["passaporte", "numero do passaporte", "n passaporte"],
+  passportNumber: ["passaporte", "numero do passaporte", "n passaporte", "numero passaporte", "n do passaporte"],
   passportExpiry: ["validade do passaporte", "validade passaporte", "vencimento passaporte"],
   notes: ["observacoes", "observacao", "obs"],
   gender: ["sexo", "genero"],
   nationality: ["nacionalidade", "pais de origem"],
-  rne: ["rne", "rnm", "crnm", "rne/rnm", "rne / rnm", "rne rnm"],
+  rne: ["rne", "rnm", "crnm", "rne/rnm", "rne / rnm", "rne rnm", "doc estrangeiro", "documento estrangeiro", "documento de estrangeiro"],
 };
 const norm = (h: string) => h.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
 
@@ -175,6 +195,11 @@ export { CLIENT_CSV_TEMPLATE } from "@/lib/client-csv";
 export function parseClientCsv(text: string) {
   const parsed = Papa.parse<string[]>(text.replace(/^﻿/, ""), { skipEmptyLines: "greedy", delimiter: "" });
   const [header, ...rows] = parsed.data;
+  return mapClientRows(header, rows);
+}
+
+/** Liga as colunas da planilha (pelo nome do cabeçalho) aos campos do cliente. */
+export function mapClientRows(header: string[] | undefined, rows: string[][]) {
   if (!header?.length) throw new AppError("Planilha vazia.");
   const map = new Map<number, keyof ImportedClient>();
   header.forEach((h, i) => {
@@ -197,9 +222,26 @@ export async function importClientsCsv(ctx: Ctx, text: string) {
   if (text.length > 5_000_000) throw new AppError("Planilha acima de 5 MB. Divida em partes.");
   const { rows } = parseClientCsv(text);
   if (rows.length > 5000) throw new AppError("Máximo de 5.000 clientes por planilha. Divida em partes.");
+  return importMappedRows(ctx, rows, 2, true);
+}
+
+/**
+ * Importa um pedaço da planilha (a tela lê o arquivo, CSV ou .xlsx, e manda em partes de até 250 linhas,
+ * para não estourar o tempo de uma chamada). firstLine = número da linha da 1ª linha do pedaço na planilha.
+ */
+export async function importClientRows(ctx: Ctx, input: { header: string[]; rows: string[][]; firstLine: number; last: boolean }) {
+  assertCan(ctx, "clients.manage");
+  if (!Array.isArray(input.header) || !Array.isArray(input.rows) || input.header.length > 200) throw new AppError("Planilha inválida.");
+  if (input.rows.length > 250) throw new AppError("Envie no máximo 250 linhas por vez.");
+  const clip = (r: unknown) => (Array.isArray(r) ? r.slice(0, 200).map((v) => String(v ?? "").slice(0, 500)) : []);
+  const { rows } = mapClientRows(input.header.map((h) => String(h ?? "").slice(0, 100)), input.rows.map(clip));
+  return importMappedRows(ctx, rows, Math.max(2, Math.floor(input.firstLine) || 2), true);
+}
+
+async function importMappedRows(ctx: Ctx, rows: ImportedClient[], firstLine: number, finish: boolean) {
   const result = { criados: 0, atualizados: 0, semMudanca: 0, erros: [] as { linha: number; motivo: string }[], avisos: [] as { linha: number; motivo: string }[] };
   for (const [i, row] of rows.entries()) {
-    const linha = i + 2;
+    const linha = i + firstLine;
     if (!Object.values(row).some((v) => v && String(v).trim())) continue;
     try {
       const r = await prisma.$transaction((tx) => upsertImportedClient(tx, ctx, row));
@@ -211,6 +253,6 @@ export async function importClientsCsv(ctx: Ctx, text: string) {
       result.erros.push({ linha, motivo: e instanceof AppError ? e.message : "erro ao gravar" });
     }
   }
-  await prisma.$transaction((tx) => audit(tx, ctx, "clientes.importados", "Client", null, { origem: "planilha", criados: result.criados, atualizados: result.atualizados, erros: result.erros.length }));
+  if (finish) await prisma.$transaction((tx) => audit(tx, ctx, "clientes.importados", "Client", null, { origem: "planilha", criados: result.criados, atualizados: result.atualizados, erros: result.erros.length }));
   return result;
 }

@@ -265,6 +265,7 @@ export const checkContractSignatureAction = async (id: string) => act((ctx) => (
 
 // ------------------------------ Importação de clientes (planilha e Monde) ------------------------------
 export const importClientsCsvAction = async (csv: string) => act((ctx) => clientImport.importClientsCsv(ctx, csv));
+export const importClientRowsAction = async (input: { header: string[]; rows: string[][]; firstLine: number; last: boolean }) => act((ctx) => clientImport.importClientRows(ctx, input));
 export const connectMondeAction = async (input: { token: string }) => act((ctx) => monde.connectMonde(ctx, input), "Monde conectado.");
 export const disconnectMondeAction = async () => act((ctx) => monde.disconnectMonde(ctx), "Monde desconectado.");
 export const restartMondeImportAction = async () => act((ctx) => monde.restartMondeImport(ctx));
