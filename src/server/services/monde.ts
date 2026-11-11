@@ -819,3 +819,45 @@ export async function importMondeSalesBatch(ctx: Ctx) {
     throw e instanceof AppError ? e : new AppError(msg);
   }
 }
+
+/**
+ * Busca no Monde os voos das vendas já importadas que ainda não têm voo cadastrado (vendas trazidas antes
+ * da Central da Viagem), sem importar a venda de novo. A tela chama em partes até `done`, passando o
+ * último id conferido.
+ */
+export async function syncMondeFlightsBatch(ctx: Ctx, input: { afterId?: string | null }) {
+  assertCan(ctx, "settings.manage");
+  assertCan(ctx, "sales.edit_all");
+  const { token } = await loadConnection(ctx);
+  const reader = new MondeReader(token);
+  const started = Date.now();
+  let afterId = typeof input?.afterId === "string" && input.afterId ? input.afterId : null;
+  const count = { checked: 0, updated: 0, flights: 0 };
+  const where = () => ({
+    companyId: ctx.companyId,
+    origin: "MONDE",
+    externalRef: { startsWith: "monde:" },
+    items: { some: { productType: "AEREO" } },
+    flights: { none: {} },
+    ...(afterId ? { id: { gt: afterId } } : {}),
+  });
+  const finish = async (done: boolean) => ({ done, afterId: done ? null : afterId, ...count, remaining: done ? 0 : await prisma.sale.count({ where: where() }) });
+  while (Date.now() - started < BATCH_BUDGET_MS()) {
+    const sales = await prisma.sale.findMany({ where: where(), orderBy: { id: "asc" }, take: 20, select: { id: true, externalRef: true } });
+    if (!sales.length) return finish(true);
+    for (const s of sales) {
+      if (Date.now() - started > BATCH_BUDGET_MS()) return finish(false);
+      const d = (await reader.get(`/sales/${s.externalRef!.slice("monde:".length)}`)) as MondeSale | null;
+      afterId = s.id;
+      count.checked++;
+      const segments = (d?.airline_tickets ?? []).filter((p) => !p.status || p.status === "active").flatMap((p) => (p.segments as Parameters<typeof saveMondeFlights>[3] | undefined) ?? []);
+      if (!segments.length) continue;
+      const n = await prisma.$transaction((tx) => saveMondeFlights(tx, ctx.companyId, s.id, segments));
+      if (n) {
+        count.updated++;
+        count.flights += n;
+      }
+    }
+  }
+  return finish(false);
+}

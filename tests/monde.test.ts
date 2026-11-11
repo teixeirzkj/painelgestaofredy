@@ -1,7 +1,7 @@
 /** Monde (API v3): conexão, clientes e vendas com o financeiro. API simulada; nenhuma chamada real. */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/server/db";
-import { connectMonde, importMondeBatch, importMondeSalesBatch, mapMondePerson, mapPaymentMethod, restartMondeImport, restartMondeSalesImport, IMPORT_ACCOUNT_NAME } from "@/server/services/monde";
+import { syncMondeFlightsBatch, connectMonde, importMondeBatch, importMondeSalesBatch, mapMondePerson, mapPaymentMethod, restartMondeImport, restartMondeSalesImport, IMPORT_ACCOUNT_NAME } from "@/server/services/monde";
 import { makeCompany } from "./helpers";
 
 const TOKEN = "credencial-de-teste-1234567890";
@@ -170,6 +170,19 @@ describe("Monde (API v3)", () => {
     const r = await importMondeSalesBatch(env.admin);
     expect(r).toMatchObject({ done: true, created: 0 });
     expect(await prisma.sale.count({ where: { companyId: env.company.id, origin: "MONDE" } })).toBe(2);
+  });
+
+  it("busca os voos das vendas já importadas sem importar de novo", async () => {
+    const s1 = await prisma.sale.findFirstOrThrow({ where: { companyId: env.company.id, externalRef: "monde:v1" } });
+    await prisma.flightSegment.deleteMany({ where: { saleId: s1.id } }); // como uma venda trazida antes da Central da Viagem
+    const salesBefore = await prisma.sale.count({ where: { companyId: env.company.id } });
+    const r = await syncMondeFlightsBatch(env.admin, { afterId: null });
+    expect(r).toMatchObject({ done: true, updated: 1, flights: 1, remaining: 0 });
+    expect(await prisma.flightSegment.count({ where: { saleId: s1.id } })).toBe(1);
+    expect(await prisma.sale.count({ where: { companyId: env.company.id } })).toBe(salesBefore);
+    // de novo: já tem voo, nada a buscar
+    expect(await syncMondeFlightsBatch(env.admin, { afterId: null })).toMatchObject({ done: true, checked: 0, flights: 0 });
+    await expect(syncMondeFlightsBatch(env.seller, { afterId: null })).rejects.toThrow();
   });
 
   it("traduz formas de pagamento e pessoas", () => {

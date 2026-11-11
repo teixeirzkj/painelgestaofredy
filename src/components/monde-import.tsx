@@ -14,6 +14,7 @@ import {
   importMondeSalesBatchAction,
   restartMondeImportAction,
   restartMondeSalesImportAction,
+  syncMondeFlightsBatchAction,
 } from "@/app/actions";
 
 export type MondeState = {
@@ -98,6 +99,7 @@ export function MondePanel({ monde }: { monde: MondeState }) {
       {monde.lastError && <p className="rounded-lg bg-red-50 p-3 text-danger">{monde.lastError}</p>}
       <ClientsSection monde={monde} />
       <SalesSection monde={monde} />
+      {monde.salesCreated > 0 || monde.salesLastImportAt ? <FlightsSyncSection /> : null}
       <p className="text-xs text-muted">
         O Monde permite 10 consultas a cada 3 segundos, então importações grandes levam um tempo. Pode fechar esta janela e continuar depois: a importação retoma de onde parou e nada é duplicado.
       </p>
@@ -218,6 +220,56 @@ function SalesSection({ monde }: { monde: NonNullable<MondeState> }) {
         </Button>
         {running && <Loader2 className="h-4 w-4 animate-spin self-center text-muted" />}
       </div>
+    </section>
+  );
+}
+
+/** Voos das vendas importadas antes da Central da Viagem: busca no Monde só os trechos, sem importar a venda de novo. */
+function FlightsSyncSection() {
+  const router = useRouter();
+  const { run } = useAction();
+  const [running, setRunning] = useState(false);
+  const [p, setP] = useState<{ checked: number; updated: number; flights: number; remaining: number } | null>(null);
+  async function go() {
+    setRunning(true);
+    const total = { checked: 0, updated: 0, flights: 0, remaining: 0 };
+    let afterId: string | null = null;
+    try {
+      for (let i = 0; i < 2000; i++) {
+        const r = await run(() => syncMondeFlightsBatchAction(afterId), { success: false, refresh: false });
+        if (!r.ok) return;
+        total.checked += r.data.checked;
+        total.updated += r.data.updated;
+        total.flights += r.data.flights;
+        total.remaining = r.data.remaining;
+        setP({ ...total });
+        afterId = r.data.afterId;
+        if (r.data.done) {
+          toast.success(total.flights ? `${total.flights} voo(s) trazido(s) do Monde para ${total.updated} venda(s).` : "Nenhum voo novo encontrado no Monde.");
+          break;
+        }
+      }
+    } finally {
+      setRunning(false);
+      router.refresh();
+    }
+  }
+  return (
+    <section className="space-y-2 rounded-lg border border-line p-4">
+      <h3 className="font-semibold text-ink">Voos das vendas já importadas</h3>
+      <p className="text-slate-700">
+        Para a Central da Viagem: busca no Monde os voos (companhia, número, trechos e horários) das vendas com passagem aérea que ainda estão sem voo na gestão. Não importa a venda de novo nem mexe no financeiro.
+      </p>
+      {p && (
+        <p className="text-ink">
+          {p.checked} venda(s) conferida(s) · {p.flights} voo(s) em {p.updated} venda(s)
+          {running && p.remaining > 0 ? ` · faltam ${p.remaining}` : ""}
+          {!running && p.checked > p.updated ? ` · ${p.checked - p.updated} sem trecho completo no Monde (cadastre o voo na venda)` : ""}
+        </p>
+      )}
+      <Button variant="outline" onClick={go} loading={running}>
+        {!running && <RefreshCw className="h-4 w-4" />} {running ? "Buscando voos…" : "Buscar voos no Monde"}
+      </Button>
     </section>
   );
 }
