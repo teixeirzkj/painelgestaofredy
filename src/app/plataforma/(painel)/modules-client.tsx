@@ -6,7 +6,7 @@ import { Plane, RefreshCw } from "lucide-react";
 import { Button, Field, Input, Select } from "@/components/ui";
 import { PasswordInput } from "@/components/ui/client";
 import { useAction } from "@/components/use-action";
-import { runMonitorForCompanyAction, saveMonitorAction, setCompanyModuleAction } from "../actions";
+import { runMonitorForCompanyAction, saveCompanyMonitorAction, saveMonitorAction, setCompanyModuleAction } from "../actions";
 import { cn } from "@/lib/utils";
 
 type Mod = { key: string; label: string; group: string; description?: string; on: boolean; defaultOn: boolean };
@@ -148,6 +148,59 @@ export function MonitorSettings({ status }: { status: MonitorStatus }) {
         Todo dia às 6h (Brasília) o sistema confere os voos de hoje e amanhã das agências com o módulo <strong>Monitor de voos</strong> ligado: 1 consulta por voo por dia, 2 unidades do plano por consulta. Os alertas aparecem na Central da
         Viagem da agência. Ligue o módulo na página de cada agência.
       </p>
+    </div>
+  );
+}
+
+type CompanyMonitor = { ownKey: boolean; marketplace: string; lastError: string | null; lastRunAt: string | null; month: string; unitsUsed: number; queries: number };
+
+/** Chave do AeroDataBox só desta agência (opcional) e consumo dela no mês. */
+export function CompanyMonitorKey({ companyId, status }: { companyId: string; status: CompanyMonitor }) {
+  const router = useRouter();
+  const { run, busy } = useAction();
+  const [key, setKey] = useState("");
+  const [marketplace, setMarketplace] = useState(status.marketplace);
+  return (
+    <div className="space-y-4 p-5 text-sm">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-lg bg-slate-50 p-3">
+          <p className="text-xs text-muted">Chave usada</p>
+          <p className="font-semibold text-ink">{status.ownKey ? "Própria da agência" : "A da plataforma"}</p>
+        </div>
+        <div className="rounded-lg bg-slate-50 p-3">
+          <p className="text-xs text-muted">Consultas da agência em {status.month.slice(5)}/{status.month.slice(0, 4)}</p>
+          <p className="font-semibold text-ink">
+            {status.queries} <span className="text-xs font-normal text-muted">({status.unitsUsed} unidades)</span>
+          </p>
+        </div>
+        <div className="rounded-lg bg-slate-50 p-3">
+          <p className="text-xs text-muted">Última conferência</p>
+          <p className="font-semibold text-ink">{status.lastRunAt ? new Date(status.lastRunAt).toLocaleString("pt-BR") : "—"}</p>
+        </div>
+      </div>
+      {status.lastError && <p className="rounded-lg bg-red-50 p-3 text-danger">{status.lastError}</p>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={status.ownKey ? "Trocar a chave desta agência" : "Chave do AeroDataBox desta agência"} hint="Opcional. Sem chave própria, usa a da plataforma.">
+          <PasswordInput value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" />
+        </Field>
+        <Field label="Onde a chave foi criada">
+          <Select value={marketplace} onChange={(e) => setMarketplace(e.target.value)}>
+            <option value="apimarket">API.market</option>
+            <option value="rapidapi">RapidAPI</option>
+            <option value="direct">Direto no AeroDataBox</option>
+          </Select>
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button loading={busy} disabled={!key.trim() && marketplace === status.marketplace} onClick={() => run(() => saveCompanyMonitorAction(companyId, { key: key || undefined, marketplace }), { onSuccess: () => { setKey(""); router.refresh(); } })}>
+          Salvar
+        </Button>
+        {status.ownKey && (
+          <Button variant="ghost" className="text-danger" loading={busy} onClick={() => run(() => saveCompanyMonitorAction(companyId, { remove: true }), { onSuccess: () => router.refresh() })}>
+            Remover chave própria
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

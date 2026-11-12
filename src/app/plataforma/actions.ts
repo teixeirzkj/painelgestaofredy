@@ -47,3 +47,4 @@ export const addCompanyAdminAction = async (companyId: string, input: unknown) =
 export const setCompanyModuleAction = async (companyId: string, key: string, enabled: boolean) => act((p) => platform.setCompanyModule(p, companyId, key, enabled), enabled ? "Módulo ligado." : "Módulo desligado.");
 export const saveMonitorAction = async (input: unknown) => act((p) => platform.saveMonitor(p, input), "Monitor de voos salvo.");
 export const runMonitorForCompanyAction = async (companyId: string) => act((p) => platform.runMonitorForCompany(p, companyId));
+export const saveCompanyMonitorAction = async (companyId: string, input: unknown) => act((p) => platform.saveCompanyMonitor(p, companyId, input), "Chave da agência salva.");

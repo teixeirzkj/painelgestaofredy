@@ -9,7 +9,7 @@ import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { isModuleKey, moduleLabel } from "@/lib/modules";
-import { checkCompanyFlights, monitorStatus, saveMonitorSettings } from "./services/flight-monitor";
+import { checkCompanyFlights, companyMonitorStatus, monitorStatus, saveCompanyMonitorKey, saveMonitorSettings } from "./services/flight-monitor";
 import { z } from "zod";
 import { prisma } from "./db";
 import { AppError } from "./errors";
@@ -243,4 +243,17 @@ export async function runMonitorForCompany(p: PlatformCtx, companyId: string) {
   const r = await checkCompanyFlights(companyId);
   await platformAudit(p, "monitor_voos.conferido", companyId, r);
   return r;
+}
+
+export async function getCompanyMonitor(companyId: string) {
+  await requirePlatformAction();
+  return companyMonitorStatus(companyId);
+}
+
+/** Chave do AeroDataBox só desta agência (ou remover para voltar a usar a da plataforma). */
+export async function saveCompanyMonitor(p: PlatformCtx, companyId: string, raw: unknown) {
+  const d = (raw ?? {}) as { key?: string; marketplace?: string; remove?: boolean };
+  if (!(await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } }))) throw new AppError("Agência não encontrada.", "NOT_FOUND");
+  await saveCompanyMonitorKey(companyId, d);
+  await platformAudit(p, d.remove ? "monitor_voos.chave_agencia_removida" : "monitor_voos.chave_agencia_salva", companyId, { marketplace: d.marketplace, chaveTrocada: !!d.key });
 }

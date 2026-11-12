@@ -6,7 +6,7 @@ import { addDays } from "@/lib/dates";
 import { enabledModules, moduleForPath } from "@/lib/modules";
 import { createSale } from "@/server/services/sales";
 import { saveFlight } from "@/server/services/flights";
-import { checkCompanyFlights, detectAlerts, monitorStatus, openFlightAlerts, resolveFlightAlert, saveMonitorSettings, checkNow } from "@/server/services/flight-monitor";
+import { checkCompanyFlights, companyMonitorStatus, detectAlerts, monitorStatus, openFlightAlerts, resolveFlightAlert, saveCompanyMonitorKey, saveMonitorSettings, checkNow } from "@/server/services/flight-monitor";
 import { setCompanyModule } from "@/server/platform";
 import { clientMessage } from "@/lib/flight-alerts";
 import { makeCompany, exampleSale } from "./helpers";
@@ -129,5 +129,48 @@ describe("monitor de voos", () => {
     const other = await makeCompany("Sem monitor");
     await expect(checkNow(other.admin)).rejects.toThrow(/não está disponível/);
     expect(await openFlightAlerts(other.admin)).toEqual([]);
+  });
+});
+
+describe("chave do AeroDataBox por agência", () => {
+  const seen: string[] = [];
+  beforeAll(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const h = new Headers(init?.headers);
+        seen.push(h.get("x-api-market-key") ?? h.get("x-rapidapi-key") ?? "");
+        return new Response(null, { status: 204 });
+      }),
+    );
+  });
+  afterAll(() => vi.unstubAllGlobals());
+
+  it("usa a chave própria da agência e conta o consumo dela; sem chave própria, usa a da plataforma", async () => {
+    await saveMonitorSettings({ key: "chave-da-plataforma-1", marketplace: "apimarket" });
+    const mk = async (name: string) => {
+      const env = await makeCompany(name);
+      const t = today(env.company);
+      await prisma.company.update({ where: { id: env.company.id }, data: { modulesJson: JSON.stringify({ monitor_voos: true }) } });
+      const s = await createSale(env.seller, exampleSale(env.client.id, env.supplier.id, { saleDate: t, tripStart: t, tripEnd: addDays(t, 3), confirm: true }));
+      await saveFlight(env.seller, s.id, null, { airline: "LA", flightNumber: "3500", origin: "GRU", destination: "SSA", departureAt: `${t}T08:00` });
+      return env;
+    };
+    const a = await mk("Agência com chave própria");
+    const b = await mk("Agência sem chave própria");
+    await saveCompanyMonitorKey(a.company.id, { key: "chave-da-agencia-A", marketplace: "rapidapi" });
+    expect((await prisma.platformSetting.findUniqueOrThrow({ where: { key: `aerodatabox.agencia.${a.company.id}` } })).value).not.toContain("chave-da-agencia-A");
+
+    await checkCompanyFlights(a.company.id);
+    await checkCompanyFlights(b.company.id);
+    expect(seen.slice(-2)).toEqual(["chave-da-agencia-A", "chave-da-plataforma-1"]);
+    expect(await companyMonitorStatus(a.company.id)).toMatchObject({ ownKey: true, marketplace: "rapidapi", queries: 1 });
+    expect(await companyMonitorStatus(b.company.id)).toMatchObject({ ownKey: false, queries: 1 });
+
+    // remover a chave própria volta a usar a da plataforma
+    await saveCompanyMonitorKey(a.company.id, { remove: true });
+    await prisma.flightSegment.updateMany({ where: { companyId: a.company.id }, data: { lastCheckedOn: null } });
+    await checkCompanyFlights(a.company.id);
+    expect(seen.at(-1)).toBe("chave-da-plataforma-1");
   });
 });

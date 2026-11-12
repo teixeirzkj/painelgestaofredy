@@ -43,11 +43,59 @@ async function writeSettings(patch: Partial<MonitorSettings>) {
   const value = JSON.stringify({ ...(await readSettings()), ...patch });
   await prisma.platformSetting.upsert({ where: { key: SETTINGS_KEY }, create: { key: SETTINGS_KEY, value }, update: { value } });
 }
-async function addUsage(units: number) {
-  const key = USAGE_PREFIX + new Date().toISOString().slice(0, 7);
+async function bump(key: string, units: number) {
   const row = await prisma.platformSetting.findUnique({ where: { key } });
   const value = String((Number(row?.value) || 0) + units);
   await prisma.platformSetting.upsert({ where: { key }, create: { key, value }, update: { value } });
+}
+/** Conta o consumo do mês: total da plataforma e da agência. */
+async function addUsage(units: number, companyId: string) {
+  const month = new Date().toISOString().slice(0, 7);
+  await bump(USAGE_PREFIX + month, units);
+  await bump(`${USAGE_PREFIX}${companyId}.${month}`, units);
+}
+
+// ------------------------------ Chave própria da agência (opcional) ------------------------------
+
+type CompanyMonitor = { keyEnc: string | null; marketplace: Marketplace; lastError: string | null; lastRunAt: string | null };
+const companyKey = (companyId: string) => `${SETTINGS_KEY}.agencia.${companyId}`;
+
+async function readCompanySettings(companyId: string): Promise<CompanyMonitor> {
+  const row = await prisma.platformSetting.findUnique({ where: { key: companyKey(companyId) } });
+  try {
+    return { keyEnc: null, marketplace: "apimarket", lastError: null, lastRunAt: null, ...(row ? JSON.parse(row.value) : {}) };
+  } catch {
+    return { keyEnc: null, marketplace: "apimarket", lastError: null, lastRunAt: null };
+  }
+}
+async function writeCompanySettings(companyId: string, patch: Partial<CompanyMonitor>) {
+  const value = JSON.stringify({ ...(await readCompanySettings(companyId)), ...patch });
+  await prisma.platformSetting.upsert({ where: { key: companyKey(companyId) }, create: { key: companyKey(companyId), value }, update: { value } });
+}
+
+/** Página da agência na plataforma: se tem chave própria, consumo do mês e último resultado. */
+export async function companyMonitorStatus(companyId: string) {
+  const c = await readCompanySettings(companyId);
+  const month = new Date().toISOString().slice(0, 7);
+  const units = Number((await prisma.platformSetting.findUnique({ where: { key: `${USAGE_PREFIX}${companyId}.${month}` } }))?.value) || 0;
+  return { ownKey: !!c.keyEnc, marketplace: c.marketplace, lastError: c.lastError, lastRunAt: c.lastRunAt, month, unitsUsed: units, queries: units / UNITS_PER_QUERY };
+}
+
+/** Grava (ou remove) a chave do AeroDataBox só desta agência. Sem chave própria, ela usa a da plataforma. */
+export async function saveCompanyMonitorKey(companyId: string, input: { key?: string | null; marketplace?: string; remove?: boolean }) {
+  if (input.remove) return writeCompanySettings(companyId, { keyEnc: null, lastError: null });
+  const patch: Partial<CompanyMonitor> = {};
+  if (typeof input.key === "string" && input.key.trim()) {
+    const k = input.key.trim();
+    if (k.length < 10 || /s/.test(k)) throw new AppError("Chave do AeroDataBox inválida.");
+    patch.keyEnc = encryptSecret(k);
+    patch.lastError = null;
+  }
+  if (input.marketplace) {
+    if (!["apimarket", "rapidapi", "direct"].includes(input.marketplace)) throw new AppError("Marketplace inválido.");
+    patch.marketplace = input.marketplace as Marketplace;
+  }
+  await writeCompanySettings(companyId, patch);
 }
 
 /** Para o painel da plataforma: configuração (sem a chave) e consumo do mês. */
@@ -97,7 +145,7 @@ export type AdbFlight = {
 
 class SubscriptionError extends AppError {}
 
-async function queryFlight(s: MonitorSettings, flight: string, date: string): Promise<AdbFlight[]> {
+async function queryFlight(s: Pick<MonitorSettings, "keyEnc" | "marketplace">, flight: string, date: string, companyId: string): Promise<AdbFlight[]> {
   const key = decryptSecret(s.keyEnc!);
   const base = s.marketplace === "rapidapi" ? "https://aerodatabox.p.rapidapi.com" : s.marketplace === "direct" ? "https://api.aerodatabox.com" : "https://prod.api.market/api/v1/aedbx/aerodatabox";
   const headers: Record<string, string> =
@@ -106,7 +154,7 @@ async function queryFlight(s: MonitorSettings, flight: string, date: string): Pr
     headers: { ...headers, Accept: "application/json" },
     signal: AbortSignal.timeout(20_000),
   });
-  await addUsage(UNITS_PER_QUERY);
+  await addUsage(UNITS_PER_QUERY, companyId);
   if (res.status === 204 || res.status === 404) return [];
   const text = await res.text();
   if (!res.ok) {
@@ -163,7 +211,10 @@ export async function checkCompanyFlights(companyId: string) {
     }
   })();
   if (!on) return { skipped: "módulo desligado" };
-  if (!s.keyEnc) return { skipped: "chave do AeroDataBox não configurada" };
+  // chave própria da agência, se houver; senão a da plataforma
+  const own = await readCompanySettings(companyId);
+  const key = own.keyEnc ? { keyEnc: own.keyEnc, marketplace: own.marketplace } : { keyEnc: s.keyEnc, marketplace: s.marketplace };
+  if (!key.keyEnc) return { skipped: "chave do AeroDataBox não configurada" };
   const t = today(company);
   const flights = await prisma.flightSegment.findMany({
     where: {
@@ -179,7 +230,7 @@ export async function checkCompanyFlights(companyId: string) {
   for (const seg of flights) {
     let list: AdbFlight[];
     try {
-      list = await queryFlight(s, `${seg.airline}${seg.flightNumber}`, seg.departureAt.slice(0, 10));
+      list = await queryFlight(key, `${seg.airline}${seg.flightNumber}`, seg.departureAt.slice(0, 10), companyId);
     } catch (e) {
       result.error = (e as Error).message;
       if (e instanceof SubscriptionError) break;
@@ -207,7 +258,9 @@ export async function checkCompanyFlights(companyId: string) {
       result.alerts++;
     }
   }
-  await writeSettings({ lastRunAt: new Date().toISOString(), lastError: result.error });
+  const stamp = { lastRunAt: new Date().toISOString(), lastError: result.error };
+  await writeCompanySettings(companyId, stamp);
+  if (!own.keyEnc) await writeSettings(stamp); // erro da chave geral aparece também no quadro da plataforma
   return result;
 }
 

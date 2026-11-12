@@ -1,12 +1,12 @@
 import { notFound } from "next/navigation";
-import { getCompanyDetail, requirePlatform } from "@/server/platform";
+import { getCompanyDetail, getCompanyMonitor, requirePlatform } from "@/server/platform";
 import { Badge, Card, CardHeader, DataList, Notice, PageHeader, Table, Td, Th } from "@/components/ui";
 import { formatBRL } from "@/lib/money";
 import { formatDateTime } from "@/lib/dates";
 import { ROLES } from "@/lib/constants";
 import type { Params } from "@/lib/params";
 import { AddAdminButton, CompanyActions, ResetPasswordButton } from "../../platform-client";
-import { ModulesPanel, RunMonitorButton } from "../../modules-client";
+import { CompanyMonitorKey, ModulesPanel, RunMonitorButton } from "../../modules-client";
 import { MODULES, enabledModules } from "@/lib/modules";
 
 export const metadata = { title: "Plataforma · Agência" };
@@ -30,6 +30,7 @@ export default async function CompanyPage({ params }: { params: Params }) {
   if (!c) notFound();
   const activeUsers = c.users.filter((u) => u.active).length;
   const on = enabledModules(c.modulesJson);
+  const monitor = on.has("monitor_voos") ? await getCompanyMonitor(c.id) : null;
   const modules = MODULES.map((m) => ({ key: m.key, label: m.label, group: m.group, description: m.description, defaultOn: m.defaultOn, on: on.has(m.key) }));
   return (
     <>
@@ -66,6 +67,12 @@ export default async function CompanyPage({ params }: { params: Params }) {
         <CardHeader title="Módulos" description="O que esta agência enxerga no painel. Vale para todos os usuários dela." action={on.has("monitor_voos") ? <RunMonitorButton companyId={c.id} /> : undefined} />
         <ModulesPanel companyId={c.id} modules={modules} />
       </Card>
+      {monitor && (
+        <Card className="mb-6">
+          <CardHeader title="Monitor de voos desta agência" description="Chave do AeroDataBox própria (opcional) e consumo da agência." />
+          <CompanyMonitorKey companyId={c.id} status={monitor} />
+        </Card>
+      )}
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader title="Usuários da agência" description="A própria agência cadastra a equipe em Equipe; aqui você recupera acessos." action={<AddAdminButton companyId={c.id} />} />
