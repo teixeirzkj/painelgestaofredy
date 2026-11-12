@@ -11,7 +11,10 @@ export function proxy(request: NextRequest) {
   if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && request.headers.get("sec-fetch-site") === "cross-site") {
     return NextResponse.json({ error: "Requisição de outro site bloqueada." }, { status: 403 });
   }
-  return NextResponse.next();
+  // o layout do painel usa o caminho para bloquear módulos desligados pela plataforma
+  const headers = new Headers(request.headers);
+  headers.set("x-pathname", request.nextUrl.pathname);
+  return NextResponse.next({ request: { headers } });
 }
 
 export const config = {

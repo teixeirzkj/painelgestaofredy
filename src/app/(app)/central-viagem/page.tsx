@@ -1,15 +1,53 @@
 import Link from "next/link";
-import { CalendarClock, CircleAlert, MapPin, Plane, PlaneTakeoff, Users } from "lucide-react";
+import { BellRing, CalendarClock, CircleAlert, MapPin, Plane, PlaneTakeoff, Users } from "lucide-react";
 import { requirePageContext } from "@/server/auth";
 import { travelCenter, SHORT_CONNECTION_MIN } from "@/server/services/flights";
 import { Badge, Card, CardHeader, EmptyState, KpiCard, Notice, PageHeader, Table, Td, Th } from "@/components/ui";
 import { formatDate } from "@/lib/dates";
+import { can } from "@/server/context";
+import { openFlightAlerts, MONITOR_MODULE } from "@/server/services/flight-monitor";
+import { CheckFlightsNow, FlightAlerts } from "./alerts-client";
 
 export const metadata = { title: "Central da Viagem" };
 
 type Row = Awaited<ReturnType<typeof travelCenter>>["flightsToday"][number];
 const hhmm = (v: string | null) => (v ? v.slice(11, 16) : "—");
 const ddmm = (v: string) => `${v.slice(8, 10)}/${v.slice(5, 7)}`;
+
+const LIVE: Record<string, { label: string; tone: "gray" | "green" | "amber" | "red" | "blue" | "violet" }> = {
+  Expected: { label: "No horário", tone: "green" },
+  CheckIn: { label: "Check-in aberto", tone: "blue" },
+  Boarding: { label: "Embarcando", tone: "blue" },
+  GateClosed: { label: "Portão fechado", tone: "blue" },
+  Departed: { label: "Decolou", tone: "blue" },
+  EnRoute: { label: "Em voo", tone: "blue" },
+  Approaching: { label: "Pousando", tone: "blue" },
+  Arrived: { label: "Pousou", tone: "green" },
+  Delayed: { label: "Atrasado", tone: "amber" },
+  Canceled: { label: "Cancelado", tone: "red" },
+  CanceledUncertain: { label: "Possível cancelamento", tone: "amber" },
+  Diverted: { label: "Desviado", tone: "red" },
+  NAO_ENCONTRADO: { label: "Sem informação", tone: "gray" },
+  Unknown: { label: "Sem informação", tone: "gray" },
+};
+
+function LiveStatus({ f }: { f: Row }) {
+  if (!f.liveStatus) return <Badge tone="gray">Programado</Badge>;
+  const s = LIVE[f.liveStatus] ?? { label: f.liveStatus, tone: "gray" as const };
+  const gate = [f.liveTerminal ? `T${f.liveTerminal}` : null, f.liveGate ? `portão ${f.liveGate}` : null].filter(Boolean).join(" · ");
+  return (
+    <div>
+      <Badge tone={s.tone}>{s.label}</Badge>
+      {(f.liveRevisedAt || gate) && (
+        <p className="mt-1 text-xs text-muted">
+          {f.liveRevisedAt && f.liveRevisedAt !== f.liveScheduledAt ? `prev. ${hhmm(f.liveRevisedAt)}` : ""}
+          {f.liveRevisedAt && f.liveRevisedAt !== f.liveScheduledAt && gate ? " · " : ""}
+          {gate}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function FlightTable({ rows, showDate }: { rows: Row[]; showDate?: boolean }) {
   return (
@@ -48,7 +86,7 @@ function FlightTable({ rows, showDate }: { rows: Row[]; showDate?: boolean }) {
             </Td>
             <Td align="center">{f.sale.passengerCount}</Td>
             <Td>
-              <Badge tone="gray">Programado</Badge>
+              <LiveStatus f={f} />
             </Td>
           </tr>
         ))}
@@ -60,20 +98,39 @@ function FlightTable({ rows, showDate }: { rows: Row[]; showDate?: boolean }) {
 export default async function TravelCenterPage() {
   const ctx = await requirePageContext();
   const c = await travelCenter(ctx);
-  const alerts = c.connections.length + c.missing.length;
+  const monitor = ctx.modules.has(MONITOR_MODULE);
+  const flightAlerts = monitor ? await openFlightAlerts(ctx) : [];
+  const alerts = c.connections.length + c.missing.length + flightAlerts.length;
 
   return (
     <>
       <PageHeader title="Central da Viagem" description="Quem está viajando, os voos dos clientes e o que precisa de atenção antes de virar problema." />
-      <Notice className="mb-6" title="Horários programados">
-        Os voos mostram o horário cadastrado na venda (ou trazido do Monde). O acompanhamento ao vivo de atraso, cancelamento e troca de portão entra quando a agência contratar o serviço de dados de voo.
-      </Notice>
+      {monitor ? (
+        <Notice className="mb-6" title="Monitor de voos ligado">
+          Todo dia às 6h os voos de hoje e amanhã são conferidos com as companhias (AeroDataBox): cancelamento, atraso, mudança de horário e portão. Cada voo é conferido uma vez por dia; a situação mostrada é a da última conferência.
+        </Notice>
+      ) : (
+        <Notice className="mb-6" title="Horários programados">
+          Os voos mostram o horário cadastrado na venda (ou trazido do Monde). O acompanhamento de cancelamento, atraso e troca de portão é um recurso adicional: fale com o suporte da Frédy Gestão para liberar.
+        </Notice>
+      )}
+      {monitor && (
+        <Card className="mb-6">
+          <CardHeader
+            title="Alterações de voo"
+            icon={BellRing}
+            description={flightAlerts.length ? `${flightAlerts.length} para resolver` : "Nenhuma alteração em aberto"}
+            action={can(ctx, "sales.view_all") ? <CheckFlightsNow /> : undefined}
+          />
+          {flightAlerts.length > 0 ? <FlightAlerts alerts={flightAlerts} agency={ctx.companyName} /> : <p className="p-5 text-sm text-muted">Quando um voo de cliente for cancelado, atrasar ou mudar de horário, o aviso aparece aqui com a mensagem pronta para o cliente.</p>}
+        </Card>
+      )}
 
       <section aria-label="Resumo" className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Viajando agora" value={String(c.traveling.length)} icon={Users} tone="violet" hint={`${c.travelingPassengers} passageiro(s)`} />
         <KpiCard label="Voos hoje" value={String(c.flightsToday.length)} icon={PlaneTakeoff} />
         <KpiCard label="Voos amanhã" value={String(c.flightsTomorrow.length)} icon={Plane} tone="slate" />
-        <KpiCard label="Pontos de atenção" value={String(alerts)} icon={CircleAlert} tone={alerts ? "amber" : "green"} hint={alerts ? "conexões curtas e voos faltando" : "nada pendente"} />
+        <KpiCard label="Pontos de atenção" value={String(alerts)} icon={CircleAlert} tone={alerts ? "amber" : "green"} hint={alerts ? (monitor ? "alterações de voo, conexões e voos faltando" : "conexões curtas e voos faltando") : "nada pendente"} />
       </section>
 
       <div className="grid gap-6 xl:grid-cols-3">

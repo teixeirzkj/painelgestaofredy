@@ -8,6 +8,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
+import { isModuleKey, moduleLabel } from "@/lib/modules";
+import { checkCompanyFlights, monitorStatus, saveMonitorSettings } from "./services/flight-monitor";
 import { z } from "zod";
 import { prisma } from "./db";
 import { AppError } from "./errors";
@@ -203,4 +205,42 @@ export async function platformOverview() {
     prisma.sale.count(),
   ]);
   return { companies, active, suspended: companies - active, users, sales };
+}
+
+// ------------------------------ Módulos por agência ------------------------------
+
+/** Liga ou desliga um módulo do painel para uma agência (vale para todos os usuários dela). */
+export async function setCompanyModule(p: PlatformCtx, companyId: string, key: string, enabled: boolean) {
+  if (!isModuleKey(key)) throw new AppError("Módulo desconhecido.");
+  const c = await prisma.company.findUnique({ where: { id: companyId }, select: { modulesJson: true } });
+  if (!c) throw new AppError("Agência não encontrada.", "NOT_FOUND");
+  let current: Record<string, boolean> = {};
+  try {
+    current = JSON.parse(c.modulesJson || "{}") ?? {};
+  } catch {
+    current = {};
+  }
+  current[key] = !!enabled;
+  await prisma.company.update({ where: { id: companyId }, data: { modulesJson: JSON.stringify(current) } });
+  await platformAudit(p, enabled ? "agencia.modulo_ligado" : "agencia.modulo_desligado", companyId, { modulo: key, nome: moduleLabel(key) });
+}
+
+// ------------------------------ Monitor de voos (AeroDataBox) ------------------------------
+
+export async function getMonitorStatus() {
+  await requirePlatformAction();
+  return monitorStatus();
+}
+
+export async function saveMonitor(p: PlatformCtx, raw: unknown) {
+  const d = (raw ?? {}) as { key?: string; marketplace?: string; maxPerRun?: number };
+  await saveMonitorSettings({ key: d.key, marketplace: d.marketplace, maxPerRun: d.maxPerRun });
+  await platformAudit(p, "monitor_voos.configurado", null, { marketplace: d.marketplace, maxPerRun: d.maxPerRun, chaveTrocada: !!d.key });
+}
+
+/** Confere agora os voos de uma agência (respeita 1 consulta por voo por dia). */
+export async function runMonitorForCompany(p: PlatformCtx, companyId: string) {
+  const r = await checkCompanyFlights(companyId);
+  await platformAudit(p, "monitor_voos.conferido", companyId, r);
+  return r;
 }

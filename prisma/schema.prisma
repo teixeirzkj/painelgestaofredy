@@ -23,6 +23,7 @@ datasource db {
 model Company {
   id                  String          @id @default(cuid())
   flightSegments      FlightSegment[]
+  flightChanges       FlightChange[]
   name                String
   document            String?
   timezone            String          @default("America/Sao_Paulo")
@@ -31,6 +32,7 @@ model Company {
   suspendedReason     String?
   logoKey             String? // logo da agência (armazenamento interno)
   plan                String          @default("PADRAO")
+  modulesJson         String          @default("{}") // módulos ligados/desligados pela plataforma: { chave: true/false } (ver src/lib/modules.ts)
   maxUsers            Int             @default(5)
   createdByPlatformId String?
   commissionPayDay    Int             @default(5) // dia do mês seguinte para pagamento de comissões
@@ -236,6 +238,7 @@ model Supplier {
 model Sale {
   id                          String          @id @default(cuid())
   flights                     FlightSegment[]
+  flightChanges               FlightChange[]
   companyId                   String
   company                     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   number                      Int
@@ -1094,22 +1097,57 @@ model BalcaoFlow {
 /// Trecho de voo de uma venda (Central da Viagem). Preenchido na venda ou pela importação do Monde.
 /// Horários locais de cada aeroporto, no formato AAAA-MM-DDTHH:mm.
 model FlightSegment {
-  id           String   @id @default(cuid())
-  companyId    String
-  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  saleId       String
-  sale         Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  airline      String // código IATA da companhia (ex.: LA, G3, TP)
-  flightNumber String // número do voo (ex.: 8084)
-  origin       String // aeroporto de origem, código IATA (ex.: GRU)
-  destination  String // aeroporto de destino, código IATA (ex.: LIS)
-  departureAt  String // partida, horário local da origem
-  arrivalAt    String? // chegada, horário local do destino
-  source       String   @default("MANUAL") // MANUAL | MONDE
-  status       String   @default("PROGRAMADO") // PROGRAMADO (o acompanhamento ao vivo depende de um provedor de voos)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String         @id @default(cuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId          String
+  sale            Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  airline         String // código IATA da companhia (ex.: LA, G3, TP)
+  flightNumber    String // número do voo (ex.: 8084)
+  origin          String // aeroporto de origem, código IATA (ex.: GRU)
+  destination     String // aeroporto de destino, código IATA (ex.: LIS)
+  departureAt     String // partida, horário local da origem
+  arrivalAt       String? // chegada, horário local do destino
+  source          String         @default("MANUAL") // MANUAL | MONDE
+  status          String         @default("PROGRAMADO") // PROGRAMADO (sem conferência ao vivo)
+  // Monitor de voos (AeroDataBox): última conferência
+  liveStatus      String? // Expected | Delayed | Canceled | CanceledUncertain | Diverted | Departed | Arrived | Unknown...
+  liveScheduledAt String? // partida programada segundo a companhia (horário local)
+  liveRevisedAt   String? // partida revista/prevista (horário local)
+  liveTerminal    String?
+  liveGate        String?
+  lastCheckedOn   String? // dia (AAAA-MM-DD) da última conferência: no máximo 1 por dia por voo
+  lastCheckedAt   DateTime?
+  changes         FlightChange[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   @@index([companyId, departureAt])
+  @@index([saleId])
+}
+
+/// Alerta do monitor de voos: voo cancelado, atrasado, com horário mudado pela companhia ou desviado.
+/// Fica na Central da Viagem até alguém marcar como resolvido.
+model FlightChange {
+  id              String         @id @default(cuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId          String
+  sale            Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  flightSegmentId String?
+  flightSegment   FlightSegment? @relation(fields: [flightSegmentId], references: [id], onDelete: SetNull)
+  kind            String // CANCELADO | POSSIVEL_CANCELAMENTO | ATRASO | HORARIO | DESVIADO
+  flight          String // ex.: LA 8084 GRU → MAD
+  departureAt     String // partida que estava na venda (horário local)
+  newTimeAt       String? // novo horário (atraso ou horário da companhia)
+  detail          String? // ex.: portão, aeroporto de desvio
+  dedupeKey       String // evita repetir o mesmo alerta
+  source          String         @default("AERODATABOX")
+  detectedAt      DateTime       @default(now())
+  resolvedAt      DateTime?
+  resolvedById    String?
+
+  @@unique([companyId, dedupeKey])
+  @@index([companyId, resolvedAt])
   @@index([saleId])
 }

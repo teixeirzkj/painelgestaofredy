@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/automacoes",
       "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/cron/voos",
+      "schedule": "0 9 * * *"
     }
   ]
 }

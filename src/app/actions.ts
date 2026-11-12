@@ -25,6 +25,7 @@ import * as finance from "@/server/services/finance";
 import * as clientImport from "@/server/services/client-import";
 import * as monde from "@/server/services/monde";
 import * as flights from "@/server/services/flights";
+import * as flightMonitor from "@/server/services/flight-monitor";
 import * as registry from "@/server/services/registry";
 import * as contracts from "@/server/services/contracts";
 import * as automations from "@/server/services/automations";
@@ -128,6 +129,8 @@ export const updateReservationAction = async (id: string, data: { status: string
 // ------------------------------ Voos (Central da Viagem) ------------------------------
 export const saveFlightAction = async (saleId: string, id: string | null, input: unknown) => act((ctx) => flights.saveFlight(ctx, saleId, id, input), "Voo salvo.");
 export const deleteFlightAction = async (saleId: string, id: string) => act((ctx) => flights.deleteFlight(ctx, saleId, id), "Voo excluído.");
+export const checkFlightsNowAction = async () => act((ctx) => flightMonitor.checkNow(ctx));
+export const resolveFlightAlertAction = async (id: string) => act((ctx) => flightMonitor.resolveFlightAlert(ctx, id), "Alerta resolvido.");
 
 // ------------------------------ Clientes e fornecedores ------------------------------
 export const searchClientsAction = async (q: string) => act((ctx) => registry.searchClients(ctx, q));

@@ -1,4 +1,6 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { moduleForPath } from "@/lib/modules";
+import { EmptyState } from "@/components/ui";
 import { requirePageContext } from "@/server/auth";
 import { can, today } from "@/server/context";
 import { AppShell, MobileNav, type NavGroup } from "@/components/shell/nav";
@@ -10,7 +12,14 @@ import { MonthPicker } from "@/components/shell/month-picker";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requirePageContext();
-  const [jar, alerts, wm] = await Promise.all([cookies(), getAlerts(ctx, today(ctx), can(ctx, "dashboard.financeiro")), workMonth(ctx.timezone)]);
+  const [jar, alerts, wm, hdrs] = await Promise.all([cookies(), getAlerts(ctx, today(ctx), can(ctx, "dashboard.financeiro")), workMonth(ctx.timezone), headers()]);
+  // módulo desligado pela plataforma: some do menu e a página fica bloqueada
+  const blocked = moduleForPath(hdrs.get("x-pathname") ?? "/");
+  const blockedModule = blocked && !ctx.modules.has(blocked.key) ? blocked : null;
+  const onModule = (href: string) => {
+    const m = moduleForPath(href);
+    return !m || ctx.modules.has(m.key);
+  };
   const fin = can(ctx, "finance.view");
   const has = (p: Parameters<typeof can>[1]) => can(ctx, p);
   type I = NavGroup["items"][number];
@@ -87,7 +96,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         ...when(has("settings.manage"), { href: "/configuracoes/acessos", label: "Log de acessos", icon: "ScrollText" }),
       ],
     },
-  ].filter((g) => g.items.length > 0) as NavGroup[];
+  ]
+    .map((g) => ({ ...g, items: g.items.filter((i) => onModule(i.href)) }))
+    .filter((g) => g.items.length > 0) as NavGroup[];
   const user = { name: ctx.userName, role: ROLES.label(ctx.role), logo: ctx.logoKey ? `/api/agencia/logo?v=${encodeURIComponent(ctx.logoKey.slice(-12))}` : null };
 
   const header = (
@@ -112,7 +123,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <AppShell groups={groups} company={ctx.companyName} user={user} initialCollapsed={jar.get("fg_sidebar")?.value === "1"} header={header}>
-      {children}
+      {blockedModule ? (
+        <div className="py-16">
+          <EmptyState title="Recurso não disponível" description={`"${blockedModule.label}" não está liberado para a sua agência. Fale com o suporte da Frédy Gestão para liberar.`} />
+        </div>
+      ) : (
+        children
+      )}
     </AppShell>
   );
 }

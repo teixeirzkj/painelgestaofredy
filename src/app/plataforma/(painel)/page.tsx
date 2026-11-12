@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Building2, CircleCheck, CirclePause, Users } from "lucide-react";
-import { listCompanies, platformOverview, requirePlatform } from "@/server/platform";
+import { getMonitorStatus, listCompanies, platformOverview, requirePlatform } from "@/server/platform";
+import { MonitorSettings } from "./modules-client";
+import { CardHeader } from "@/components/ui";
 import { signatureUsageByCompany } from "@/server/services/zapsign";
 import { formatBRL } from "@/lib/money";
 import { Badge, Card, EmptyState, KpiCard, PageHeader, Table, Td, Th } from "@/components/ui";
@@ -15,7 +17,7 @@ export default async function PlatformHome({ searchParams }: { searchParams: Sea
   await requirePlatform(); // a checagem do layout não basta: a página pode ser pedida sozinha
   const sp = await searchParams;
   const month = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).format(new Date()).slice(0, 7);
-  const [o, companies, usage] = await Promise.all([platformOverview(), listCompanies(str(sp, "q")), signatureUsageByCompany(month)]);
+  const [o, companies, usage, monitor] = await Promise.all([platformOverview(), listCompanies(str(sp, "q")), signatureUsageByCompany(month), getMonitorStatus()]);
   return (
     <>
       <PageHeader title="Agências clientes" description="Crie a conta de cada agência, entregue o login do administrador e acompanhe o uso." actions={<NewCompanyButton />} />
@@ -25,6 +27,10 @@ export default async function PlatformHome({ searchParams }: { searchParams: Sea
         <KpiCard label="Suspensas" value={String(o.suspended)} icon={CirclePause} tone={o.suspended ? "amber" : "slate"} />
         <KpiCard label="Usuários ativos" value={String(o.users)} icon={Users} tone="violet" hint={`${o.sales} vendas registradas`} />
       </section>
+      <Card className="mb-6">
+        <CardHeader title="Monitor de voos (AeroDataBox)" description="Chave e consumo da plataforma. O módulo é ligado por agência." />
+        <MonitorSettings status={monitor} />
+      </Card>
       <Card>
         <div className="border-b border-line px-5 py-3">
           <FilterForm>

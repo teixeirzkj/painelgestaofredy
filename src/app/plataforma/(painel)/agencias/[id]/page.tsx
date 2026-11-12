@@ -6,6 +6,8 @@ import { formatDateTime } from "@/lib/dates";
 import { ROLES } from "@/lib/constants";
 import type { Params } from "@/lib/params";
 import { AddAdminButton, CompanyActions, ResetPasswordButton } from "../../platform-client";
+import { ModulesPanel, RunMonitorButton } from "../../modules-client";
+import { MODULES, enabledModules } from "@/lib/modules";
 
 export const metadata = { title: "Plataforma · Agência" };
 
@@ -16,6 +18,9 @@ const ACTION: Record<string, string> = {
   "agencia.plano_alterado": "Plano alterado",
   "usuario.senha_redefinida": "Senha redefinida",
   "usuario.admin_criado": "Administrador adicionado",
+  "agencia.modulo_ligado": "Módulo ligado",
+  "agencia.modulo_desligado": "Módulo desligado",
+  "monitor_voos.conferido": "Voos conferidos (monitor)",
 };
 
 export default async function CompanyPage({ params }: { params: Params }) {
@@ -24,6 +29,8 @@ export default async function CompanyPage({ params }: { params: Params }) {
   const c = await getCompanyDetail(id).catch(() => null);
   if (!c) notFound();
   const activeUsers = c.users.filter((u) => u.active).length;
+  const on = enabledModules(c.modulesJson);
+  const modules = MODULES.map((m) => ({ key: m.key, label: m.label, group: m.group, description: m.description, defaultOn: m.defaultOn, on: on.has(m.key) }));
   return (
     <>
       <PageHeader
@@ -54,6 +61,10 @@ export default async function CompanyPage({ params }: { params: Params }) {
             { label: "Volume vendido (confirmado)", value: formatBRL(c.grossCents) },
           ]}
         />
+      </Card>
+      <Card className="mb-6">
+        <CardHeader title="Módulos" description="O que esta agência enxerga no painel. Vale para todos os usuários dela." action={on.has("monitor_voos") ? <RunMonitorButton companyId={c.id} /> : undefined} />
+        <ModulesPanel companyId={c.id} modules={modules} />
       </Card>
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">

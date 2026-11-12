@@ -44,3 +44,6 @@ export const setCompanyActiveAction = async (id: string, active: boolean, reason
 export const updateCompanyPlanAction = async (id: string, input: unknown) => act((p) => platform.updateCompanyPlan(p, id, input), "Plano atualizado.");
 export const resetUserPasswordAction = async (companyId: string, userId: string, password: string) => act((p) => platform.resetUserPassword(p, companyId, userId, password), "Senha redefinida.");
 export const addCompanyAdminAction = async (companyId: string, input: unknown) => act((p) => platform.addCompanyAdmin(p, companyId, input), "Administrador adicionado.");
+export const setCompanyModuleAction = async (companyId: string, key: string, enabled: boolean) => act((p) => platform.setCompanyModule(p, companyId, key, enabled), enabled ? "Módulo ligado." : "Módulo desligado.");
+export const saveMonitorAction = async (input: unknown) => act((p) => platform.saveMonitor(p, input), "Monitor de voos salvo.");
+export const runMonitorForCompanyAction = async (companyId: string) => act((p) => platform.runMonitorForCompany(p, companyId));
