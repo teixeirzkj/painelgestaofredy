@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ArrowRight, CheckCircle2, Download, MessageCircle, UserRound } from "lucide-react";
-import { today } from "@/server/context";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, MessageCircle, Plane, UserRound } from "lucide-react";
+import { can, today } from "@/server/context";
 import { AppError } from "@/server/errors";
 import { BALCAO_STEPS, DONE_STEP, loadFlow } from "@/server/services/balcao";
 import { fredyCardPrefill, fredyConnected } from "@/server/services/fredy";
 import { getContract } from "@/server/services/contracts";
+import { listSaleFlights } from "@/server/services/flights";
+import { FlightsPanel } from "@/app/(app)/vendas/[id]/flights-panel";
 import { zapsignConfigured, signatureCostCents } from "@/server/services/zapsign";
 import { prisma } from "@/server/db";
 import { Card, Notice } from "@/components/ui";
@@ -50,6 +52,24 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
     <Link href={base} className={`${btn} bg-brand-600 text-white hover:bg-brand-700`}>
       {d.current >= DONE_STEP ? "Voltar ao resumo" : `Ir para a etapa ${d.current}: ${BALCAO_STEPS[d.current - 1]}`} <ArrowRight className="h-4 w-4" />
     </Link>
+  );
+  // voos da venda: o vendedor cadastra aqui mesmo (etapas 4 e 7; a tela final fecha sozinha)
+  const showFlights = !!sale && sale.status !== "ORCAMENTO" && sale.status !== "CANCELADA" && (view === 4 || view === 7);
+  const flightsCard = showFlights && sale && (
+    <Card>
+      <div className="flex items-center gap-3 border-b border-line px-5 py-3">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-25 text-brand-700">
+          <Plane className="h-4 w-4" />
+        </span>
+        <div>
+          <p className="font-semibold text-ink">Voos da viagem</p>
+          <p className="text-xs text-muted">Com o bilhete emitido, inclua cada trecho (ida, volta e conexões). Os voos aparecem na Central da Viagem e, com o monitor ligado, a agência é avisada de atraso ou cancelamento.</p>
+        </div>
+      </div>
+      <div className="px-5 py-4">
+        <FlightsPanel saleId={sale.id} flights={await listSaleFlights(ctx, sale.id)} canEdit={sale.sellerId === ctx.userId || can(ctx, "sales.edit_all")} />
+      </div>
+    </Card>
   );
   const footer = (children: React.ReactNode) => <div className="flex flex-wrap items-center justify-end gap-3 border-t border-line px-5 py-4">{children}</div>;
 
@@ -347,7 +367,7 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
     }
   } else if (view === 7 && sale) {
     body = (
-      <StepBox n={7} title="Vouchers e comprovantes" optional steps={["Anexe vouchers, bilhetes e comprovantes da viagem (imagem ou PDF). Dá para arrastar ou colar a imagem.", "Clique em Concluir atendimento."]}>
+      <StepBox n={7} title="Vouchers e comprovantes" optional steps={["Anexe vouchers, bilhetes e comprovantes da viagem (imagem ou PDF). Dá para arrastar ou colar a imagem.", "Inclua os voos do bilhete no quadro Voos da viagem, logo abaixo.", "Clique em Concluir atendimento."]}>
         <AttachmentsPanel target={{ kind: "sale", id: sale.id }} items={sale.attachments} canUpload timezone={ctx.timezone} />
         {footer(reviewing ? goCurrent : <FlowMarkButton id={flowId} mark="finish" label="Concluir atendimento" />)}
       </StepBox>
@@ -400,6 +420,7 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
           </Notice>
         )}
         {body}
+        {flightsCard}
       </main>
     </>
   );

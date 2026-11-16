@@ -117,6 +117,7 @@ export async function loadFlow(ctx: Ctx, id: string) {
           destination: true,
           tripStart: true,
           grossCents: true,
+          sellerId: true,
           externalRef: true,
           tripId: true,
           contracts: { select: { id: true, status: true, outdated: true, tripId: true }, orderBy: { createdAt: "desc" }, take: 1 },
