@@ -18,7 +18,8 @@ export const AI_EXTRACT_MAX_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
 type ImageType = (typeof IMAGE_TYPES)[number];
 
-const MODEL = "claude-opus-5-5";
+// Menor modelo (mais barato): Claude Haiku 5.5. Ele não tem modelo reserva no servidor (não enviar "fallbacks").
+const MODEL = "claude-haiku-5-5";
 
 const ExtractionSchema = z.object({
   isTravelBooking: z.boolean().describe("true se o documento é uma reserva, orçamento, voucher, bilhete ou confirmação de viagem"),
@@ -102,8 +103,6 @@ export async function extractSaleFromFile(ctx: Ctx, file: { bytes: Buffer; mimeT
     const res = await client().beta.messages.parse({
       model: MODEL,
       max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       output_config: { effort: "low", format: betaZodOutputFormat(ExtractionSchema) },
       system: SYSTEM,
       messages: [{ role: "user", content: [source, { type: "text", text: "Extraia os dados desta reserva para cadastrar a venda." }] }],
