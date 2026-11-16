@@ -216,17 +216,17 @@ export async function checkCompanyFlights(companyId: string) {
   const key = own.keyEnc ? { keyEnc: own.keyEnc, marketplace: own.marketplace } : { keyEnc: s.keyEnc, marketplace: s.marketplace };
   if (!key.keyEnc) return { skipped: "chave do AeroDataBox não configurada" };
   const t = today(company);
-  const flights = await prisma.flightSegment.findMany({
-    where: {
-      companyId,
-      departureAt: { gte: t, lt: addDays(t, 2) },
-      OR: [{ lastCheckedOn: null }, { lastCheckedOn: { not: t } }],
-      sale: { status: { in: ["CONFIRMADA", "CONCLUIDA"] } },
-    },
-    orderBy: { departureAt: "asc" },
-    take: s.maxPerRun,
-  });
-  const result = { checked: 0, alerts: 0, notFound: 0, error: null as string | null };
+  const inWindow = { companyId, departureAt: { gte: t, lt: addDays(t, 2) }, sale: { status: { in: ["CONFIRMADA", "CONCLUIDA"] } } };
+  const [flights, upcoming] = await Promise.all([
+    prisma.flightSegment.findMany({
+      where: { ...inWindow, OR: [{ lastCheckedOn: null }, { lastCheckedOn: { not: t } }] },
+      orderBy: { departureAt: "asc" },
+      take: s.maxPerRun,
+    }),
+    prisma.flightSegment.count({ where: inWindow }),
+  ]);
+  // upcoming: voos de hoje e amanhã (conferidos ou não), para a tela diferenciar "nenhum voo" de "já conferidos"
+  const result = { checked: 0, alerts: 0, notFound: 0, upcoming, error: null as string | null };
   for (const seg of flights) {
     let list: AdbFlight[];
     try {

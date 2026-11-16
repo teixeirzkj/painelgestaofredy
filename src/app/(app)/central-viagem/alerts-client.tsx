@@ -108,9 +108,10 @@ export function CheckFlightsNow() {
         run(() => checkFlightsNowAction(), {
           success: false,
           onSuccess: (r) => {
-            const d = r as { skipped?: string; checked?: number; alerts?: number; notFound?: number; error?: string | null };
+            const d = r as { skipped?: string; checked?: number; alerts?: number; notFound?: number; upcoming?: number; error?: string | null };
             if (d.skipped) toast.info(`Não conferiu: ${d.skipped}.`);
             else if (d.error) toast.error(`${d.checked ?? 0} voo(s) conferido(s). ${d.error}`);
+            else if (!d.checked && !d.upcoming) toast.info("Nenhum voo de cliente hoje ou amanhã para conferir. Nenhuma consulta foi gasta.");
             else if (!d.checked) toast.info("Os voos de hoje e amanhã já foram conferidos hoje.");
             else toast.success(`${d.checked} voo(s) conferido(s), ${d.alerts} alerta(s) novo(s)${d.notFound ? `, ${d.notFound} sem informação` : ""}.`);
             router.refresh();
