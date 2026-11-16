@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Check, LogOut, Plane } from "lucide-react";
+import { Check, IdCard, LogOut, Plane } from "lucide-react";
 import { prisma } from "@/server/db";
 import type { Ctx } from "@/server/context";
 import { BALCAO_STEPS } from "@/server/services/balcao";
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * Cabeçalho da venda rápida com as 7 etapas: a feita vira um círculo verde, a que está na tela mostra o nome,
  * as próximas ficam só com o número. Dentro de um atendimento, as etapas feitas são clicáveis (para rever).
  */
-export async function BalcaoHeader({ ctx, view, done, baseHref }: { ctx: Ctx; view: number; done: boolean[]; baseHref?: string }) {
+export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/balcao/ficha" }: { ctx: Ctx; view: number; done: boolean[]; baseHref?: string; sheetHref?: string | null }) {
   const company = await prisma.company.findUnique({ where: { id: ctx.companyId }, select: { name: true, tradeName: true } });
   return (
     <header className="no-print sticky top-0 z-20 border-b border-line bg-white/95 backdrop-blur">
@@ -68,6 +68,11 @@ export async function BalcaoHeader({ ctx, view, done, baseHref }: { ctx: Ctx; vi
             );
           })}
         </ol>
+        {sheetHref && (
+          <Link href={sheetHref} className="inline-flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-ink hover:bg-slate-50" title="Dados de todos os passageiros da viagem, prontos para copiar">
+            <IdCard className="h-3.5 w-3.5" /> Ficha dos passageiros
+          </Link>
+        )}
         <form action={logoutAction}>
           <button type="submit" className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink" title={`Sair (${ctx.userName})`}>
             <LogOut className="h-3.5 w-3.5" /> Sair

@@ -383,7 +383,13 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
 
   return (
     <>
-      <BalcaoHeader ctx={ctx} view={Math.min(view, BALCAO_STEPS.length + 1)} done={d.done} baseHref={base} />
+      <BalcaoHeader
+        ctx={ctx}
+        view={Math.min(view, BALCAO_STEPS.length + 1)}
+        done={d.done}
+        baseHref={base}
+        sheetHref={sale ? `/balcao/ficha/${sale.id}?voltar=${encodeURIComponent(base)}` : `/balcao/ficha?voltar=${encodeURIComponent(base)}`}
+      />
       <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">
         {reviewing && (
           <Notice title={`Revendo a etapa ${view}`}>
