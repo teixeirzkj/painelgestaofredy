@@ -69,7 +69,8 @@ describe("venda por print com IA", () => {
     expect(d.totalCents).toBe(540050);
     // o pedido usa o modelo atual, com saída estruturada
     const req = parse.mock.calls[0][0];
-    expect(req.model).toBe("claude-opus-5-5");
+    expect(req.model).toBe("claude-haiku-5-5");
+    expect(req.fallbacks).toBeUndefined(); // o Haiku não tem modelo reserva no servidor
     expect(req.output_config.format).toBeTruthy();
     expect(req.messages[0].content[0]).toMatchObject({ type: "image", source: { type: "base64", media_type: "image/png" } });
   });
