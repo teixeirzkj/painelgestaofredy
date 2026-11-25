@@ -177,8 +177,15 @@ export async function saveClient(ctx: Ctx, id: string | null, raw: unknown) {
       return { id: c.id, name: c.name };
     });
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")
-      throw new AppError("Já existe um cliente com este CPF/CNPJ.", "CONFLICT", [{ field: "document", message: "CPF/CNPJ já cadastrado." }]);
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      // o cadastro existente pode estar fora do alcance de quem tenta (cliente de outro vendedor): diga isso em vez de só "já cadastrado"
+      const visible = d.document ? await prisma.client.findFirst({ where: { AND: [{ document: d.document }, clientScope(ctx)] }, select: { id: true } }) : null;
+      if (d.document && !visible) {
+        const msg = "Este CPF/CNPJ já está cadastrado na agência por outro vendedor, e seu usuário não vê os clientes dos colegas. Peça ao administrador para ligar “Vendedor vê todos os clientes da agência” em Configurações › Permissões configuráveis.";
+        throw new AppError(msg, "CONFLICT", [{ field: "document", message: "Cadastrado por outro vendedor (veja o aviso)." }]);
+      }
+      throw new AppError("Já existe um cliente com este CPF/CNPJ. Busque pelo CPF e use o cadastro existente.", "CONFLICT", [{ field: "document", message: "CPF/CNPJ já cadastrado." }]);
+    }
     throw e;
   }
 }

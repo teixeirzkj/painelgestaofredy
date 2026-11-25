@@ -21,8 +21,14 @@ const ISSUED = ["AGUARDANDO_ENVIO", "ENVIADO", "ASSINADO"];
 const SENT = ["ENVIADO", "ASSINADO"];
 
 /** O que falta no cadastro para emitir o contrato. */
-export function clientMissing(c: IdentityInput & { street: string | null }) {
-  return [!hasClientDocument(c) && missingDocLabel(c), !c.street && "endereço"].filter(Boolean) as string[];
+/** O que impede de seguir no atendimento: só o documento (CPF/CNPJ ou, se estrangeiro, passaporte/RNE). */
+export function clientMissing(c: IdentityInput & { street?: string | null }) {
+  return [!hasClientDocument(c) && missingDocLabel(c)].filter(Boolean) as string[];
+}
+
+/** O que falta mas não trava a etapa: o endereço (o contrato avisa na hora de emitir). */
+export function clientWarnings(c: { street: string | null }) {
+  return [!c.street && "endereço"].filter(Boolean) as string[];
 }
 
 type StepInput = {
@@ -159,7 +165,7 @@ export async function loadFlow(ctx: Ctx, id: string) {
       })
     : [];
   const tripContract = contract?.tripId && sale?.trip ? { code: sale.trip.code } : null;
-  return { flow, client, missing, sale, contract, tripContract, tripOffer, canContract, drafts, ...steps };
+  return { flow, client, missing, warnings: clientWarnings(client), sale, contract, tripContract, tripOffer, canContract, drafts, ...steps };
 }
 
 export type FlowMark = "data" | "docs" | "sent" | "finish";

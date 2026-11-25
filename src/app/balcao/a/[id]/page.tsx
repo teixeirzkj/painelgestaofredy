@@ -90,7 +90,8 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
           {!sale && <DiscardFlowButton id={flowId} to="/balcao?etapa=2" label="Trocar cliente" confirmText="Trocar o cliente deste atendimento? O cadastro continua na gestão." />}
           <EditClientButton id={client.id} initial={client} />
         </div>
-        {d.missing.length > 0 && <p className="border-t border-line bg-amber-50 px-5 py-2 text-sm text-amber-900">Falta no cadastro: <strong>{d.missing.join(" e ")}</strong>. Clique em Editar e complete: o contrato precisa desses dados.</p>}
+        {d.missing.length > 0 && <p className="border-t border-line bg-amber-50 px-5 py-2 text-sm text-amber-900">Falta no cadastro: <strong>{d.missing.join(" e ")}</strong>. Clique em Editar e complete para continuar.</p>}
+        {d.missing.length === 0 && d.warnings.length > 0 && <p className="border-t border-line bg-slate-50 px-5 py-2 text-sm text-slate-600">Sem {d.warnings.join(" e ")} no cadastro. Dá para continuar e completar depois, mas o contrato precisa desse dado para ser emitido.</p>}
         {footer(reviewing ? goCurrent : <FlowMarkButton id={flowId} mark="data" label="Dados conferidos, continuar" disabled={d.missing.length > 0} />)}
       </StepBox>
     );

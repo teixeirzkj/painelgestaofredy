@@ -57,7 +57,8 @@ describe("regras puras do documento do cliente", () => {
     expect(clientMissing({ document: null, street: "Rua A" })).toEqual(["CPF/CNPJ"]);
     expect(clientMissing({ document: null, street: "Rua A", foreigner: true, passportNumber: "AAB123456" })).toEqual([]);
     expect(clientMissing({ document: null, street: "Rua A", foreigner: true, rne: "V1234567" })).toEqual([]);
-    expect(clientMissing({ document: null, street: null, foreigner: true })).toEqual(["passaporte ou RNE", "endereço"]);
+    expect(clientMissing({ document: null, street: null, foreigner: true })).toEqual(["passaporte ou RNE"]);
+    expect(clientMissing({ document: "12345678909", street: null })).toEqual([]);
   });
 });
 
