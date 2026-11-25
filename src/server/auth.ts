@@ -17,7 +17,8 @@ const MAX_AGE = 60 * 60 * 12; // 12 horas
 const EMBED_COOKIE = "fg_embed";
 const EMBED_MAX_AGE = 60 * 60 * 24 * 90; // 90 dias
 /** O login longo do popup só serve para a venda rápida: mesmo de um administrador, não abre relatórios, financeiro nem configurações. */
-const EMBED_PERMISSIONS: Permission[] = ["sales.create", "clients.manage", "contracts.manage"];
+// "clients.view_all" vale no popup quando a agência libera (sem ela, o vendedor não acha clientes de colegas nem os importados do Monde)
+const EMBED_PERMISSIONS: Permission[] = ["sales.create", "clients.manage", "clients.view_all", "contracts.manage"];
 const embedOpts = { httpOnly: true, sameSite: "none" as const, secure: true, partitioned: true, path: "/" };
 
 function secret() {
