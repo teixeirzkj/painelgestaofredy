@@ -58,6 +58,8 @@ type ClientForContract = SaleForContract["client"];
 const FOREIGN_NO_DOC = "#cliente.estrangeiro_sem_cpf";
 /** "CPF/CNPJ {{cliente.documento}}" dos modelos antigos (gravados antes de existir {{cliente.identificacao}}). */
 const OLD_DOC_RE = /CPF\/CNPJ:?\s*\{\{\s*cliente\.documento\s*\}\}/g;
+/** "[MODELO SUGERIDO: ...]" que os modelos sugeridos antigos traziam (com a quebra de linha). */
+const MODEL_NOTICE_RE = /^[ \t]*\[MODELO SUGERIDO[^\]\n]*\][ \t]*\r?\n?/gim;
 
 /** Variáveis do cliente (cliente.*). Estrangeiro sem CPF é identificado pelo passaporte ou RNE. */
 export function clientVars(c: ClientForContract): Record<string, string> {
@@ -97,7 +99,22 @@ function planLines(plan: PlanRow[]) {
   return plan.map((p, idx) => `${idx + 1}) ${formatBRL(p.amountCents)} em ${formatDate(p.dueDate)} via ${PAYMENT_METHODS.label(p.method)}`).join("\n");
 }
 
-type PayItem = { productType: string; description: string | null; priceCents: number; supplierPayment: string; supplier: { name: string } | null };
+type PayItem = {
+  productType: string;
+  description: string | null;
+  priceCents: number;
+  supplierPayment: string;
+  supplier: { name: string } | null;
+  clientPayMethod?: string | null;
+  clientPayInstallments?: number | null;
+};
+
+/** ", via Cartão de crédito em 10x" — como o cliente paga o fornecedor, quando informado. */
+function clientPayWay(i: PayItem) {
+  if (!i.clientPayMethod) return "";
+  const n = i.clientPayInstallments ?? 1;
+  return `, via ${PAYMENT_METHODS.label(i.clientPayMethod)}${n > 1 ? ` em ${n}x` : " à vista"}`;
+}
 
 /**
  * Condições de pagamento do contrato: as parcelas que a agência recebe e, à parte, os produtos que o cliente paga
@@ -110,7 +127,7 @@ export function paymentText(planJson: string, items: PayItem[]) {
   if (plan.length) parts.push(direct.length ? `Pago à agência:\n${planLines(plan)}` : planLines(plan));
   if (direct.length) {
     const lines = direct.map(
-      (i) => `- ${PRODUCT_TYPES.label(i.productType)}${i.description ? `: ${i.description}` : ""} — ${formatBRL(i.priceCents)}, pago pelo cliente diretamente ${i.supplier ? `ao fornecedor ${i.supplier.name}` : "ao fornecedor"}`,
+      (i) => `- ${PRODUCT_TYPES.label(i.productType)}${i.description ? `: ${i.description}` : ""} — ${formatBRL(i.priceCents)}, pago pelo cliente diretamente ${i.supplier ? `ao fornecedor ${i.supplier.name}` : "ao fornecedor"}${clientPayWay(i)}`,
     );
     parts.push(`Pago pelo cliente diretamente ao fornecedor, conforme as condições do fornecedor:\n${lines.join("\n")}`);
   }
@@ -185,6 +202,9 @@ export function renderTemplate(body: string, clauses: string, vars: Record<strin
     body = body.replace(OLD_DOC_RE, "{{cliente.identificacao}}");
     clauses = clauses.replace(OLD_DOC_RE, "{{cliente.identificacao}}");
   }
+  // a linha de aviso dos modelos sugeridos antigos nunca vai para o contrato do cliente
+  body = body.replace(MODEL_NOTICE_RE, "");
+  clauses = clauses.replace(MODEL_NOTICE_RE, "");
   const missing = new Set<string>();
   const used = new Set<string>();
   const fill = (text: string) =>

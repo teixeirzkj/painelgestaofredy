@@ -107,6 +107,8 @@ export async function editSaleFormData(ctx: Ctx, id: string) {
       supplierCardInstallments: i.supplierCardInstallments,
       supplierCardStartInstallment: i.supplierCardStartInstallment,
       supplierCardFirstBillMonth: i.supplierCardFirstBillMonth ?? "",
+      clientPayMethod: i.clientPayMethod ?? "",
+      clientPayInstallments: i.clientPayInstallments,
     })),
     payments: sale.plan,
     passengers: sale.passengers.map((p) => ({

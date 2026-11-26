@@ -46,13 +46,15 @@ const ACTION_LABEL: Record<string, string> = {
 function supplierPaymentText(i: {
   supplierPayment: string;
   supplierPayMethod: string | null;
+  clientPayMethod: string | null;
+  clientPayInstallments: number;
   supplierCardInstallments: number;
   supplierCardStartInstallment: number;
   supplierCardAccount: { name: string } | null;
 }) {
   switch (i.supplierPayment) {
     case "CLIENTE_DIRETO":
-      return "pago pelo cliente direto";
+      return `pago pelo cliente direto${i.clientPayMethod ? ` · ${PAYMENT_METHODS.label(i.clientPayMethod)}${i.clientPayInstallments > 1 ? ` em ${i.clientPayInstallments}x` : " à vista"}` : ""}`;
     case "CARTAO_AGENCIA": {
       const start = i.supplierCardStartInstallment > 1 ? ` (a partir da ${i.supplierCardStartInstallment}ª)` : "";
       const parts = i.supplierCardInstallments > 1 ? ` · ${i.supplierCardInstallments}x${start}` : "";

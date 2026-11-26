@@ -1,9 +1,8 @@
 /**
- * Modelos de contrato sugeridos para uma agência nova. São rascunhos: o texto deixa claro
- * que precisa passar pela revisão jurídica da agência antes do uso.
+ * Modelos de contrato sugeridos para uma agência nova. São rascunhos: a tela de modelos avisa
+ * que o texto deve passar pela revisão jurídica da agência (o aviso não vai mais no contrato do cliente).
  */
 export const SUGGESTED_TEMPLATE_BODY = `CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE INTERMEDIAÇÃO TURÍSTICA
-[MODELO SUGERIDO: submeta à revisão jurídica da agência antes do uso e apague esta linha]
 
 CONTRATADA: {{agencia.nome}}, CNPJ {{agencia.documento}}.
 CONTRATANTE: {{cliente.nome}}, {{cliente.identificacao}}, residente em {{cliente.endereco}}, telefone {{cliente.telefone}}, e-mail {{cliente.email}}.

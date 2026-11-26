@@ -63,6 +63,9 @@ export const saleItemSchema = z.object({
   supplierCardInstallments: z.number().int().min(1, "Parcelas inválidas.").max(24, "No máximo 24 parcelas.").default(1),
   supplierCardStartInstallment: z.number().int().min(1, "Parcela inválida.").max(24, "Parcela inválida.").default(1),
   supplierCardFirstBillMonth: billMonth.optional().nullable().or(z.literal("")).transform((v) => v || null),
+  // cliente paga direto ao fornecedor: forma e parcelas (só informativo, vai para o contrato)
+  clientPayMethod: z.enum(PAYMENT_METHODS.values).optional().nullable().or(z.literal("")).transform((v) => v || null),
+  clientPayInstallments: z.number().int().min(1, "Parcelas inválidas.").max(36, "No máximo 36 parcelas.").default(1),
 })
   .transform((i) => normalizeSupplierPayment(i))
   .superRefine((i, c) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paymentText } from "@/server/services/contracts";
+import { paymentText, renderTemplate } from "@/server/services/contracts";
 
 const aereo = { productType: "AEREO", description: "GRU-LIS", priceCents: 1255247, supplierPayment: "CLIENTE_DIRETO", supplier: { name: "Azul" } };
 const hotel = { productType: "HOSPEDAGEM", description: null, priceCents: 300000, supplierPayment: "FATURADO", supplier: null };
@@ -19,6 +19,15 @@ describe("condições de pagamento no contrato", () => {
     const t = paymentText(plan, [aereo, hotel]);
     expect(t).toContain("Pago à agência:");
     expect(t).toContain("Pago pelo cliente diretamente ao fornecedor");
+  });
+  it("forma e parcelas que o cliente paga ao fornecedor vão para o contrato", () => {
+    expect(paymentText("[]", [{ ...aereo, clientPayMethod: "CARTAO_CREDITO", clientPayInstallments: 10 }])).toMatch(/via Cartão de crédito em 10x$/);
+    expect(paymentText("[]", [{ ...aereo, clientPayMethod: "PIX", clientPayInstallments: 1 }])).toMatch(/via PIX à vista$/);
+  });
+  it("a linha [MODELO SUGERIDO] dos modelos antigos não aparece no contrato", () => {
+    const body = "CONTRATO\n[MODELO SUGERIDO: submeta à revisão jurídica da agência antes do uso e apague esta linha]\n\nCONTRATADA: {{agencia.nome}}";
+    const r = renderTemplate(body, "", { "agencia.nome": "Azul" });
+    expect(r.content).toBe("CONTRATO\n\nCONTRATADA: Azul");
   });
   it("sem parcelas e sem item direto: continua faltando", () => {
     expect(paymentText("[]", [hotel])).toBe("");

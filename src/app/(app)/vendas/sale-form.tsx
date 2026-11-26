@@ -74,6 +74,8 @@ type SupplierPayFields = {
   supplierCardInstallments: number;
   supplierCardStartInstallment: number;
   supplierCardFirstBillMonth: string;
+  clientPayMethod: string;
+  clientPayInstallments: number;
 };
 type AgencyCard = { id: string; name: string; closingDay: number | null; dueDay: number | null; ready: boolean };
 type Payment = { key: string; dueDate: string; amountCents: number; method: string; description?: string | null; payerClientId?: string | null };
@@ -132,6 +134,8 @@ const blankItem = (patch: Partial<Item> = {}): Item => ({
   supplierCardInstallments: 1,
   supplierCardStartInstallment: 1,
   supplierCardFirstBillMonth: "",
+  clientPayMethod: "",
+  clientPayInstallments: 1,
   ...(Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<Item>),
 });
 
@@ -513,6 +517,8 @@ export function SaleForm({
         supplierCardInstallments: i.supplierPayment === "CARTAO_AGENCIA" ? i.supplierCardInstallments : 1,
         supplierCardStartInstallment: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardStartInstallment : 1,
         supplierCardFirstBillMonth: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardFirstBillMonth || null : null,
+        clientPayMethod: i.supplierPayment === "CLIENTE_DIRETO" ? i.clientPayMethod || null : null,
+        clientPayInstallments: i.supplierPayment === "CLIENTE_DIRETO" && i.clientPayMethod ? i.clientPayInstallments : 1,
         costCents: i.commercialModel === "COMISSAO" ? 0 : i.costCents,
         supplierCommissionCents: i.commercialModel === "COMISSAO" ? i.supplierCommissionCents : 0,
         cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
@@ -768,6 +774,29 @@ export function SaleForm({
                       </Field>
                     )}
                   </div>
+                  {i.supplierPayment === "CLIENTE_DIRETO" && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <Field label="Como o cliente paga o fornecedor" hint="vai para o contrato">
+                        <Select value={i.clientPayMethod} onChange={(e) => updateItem(i.uid, { clientPayMethod: e.target.value })}>
+                          <option value="">Não informar</option>
+                          {PAYMENT_METHODS.values.map((v) => (
+                            <option key={v} value={v}>
+                              {PAYMENT_METHODS.label(v)}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Em quantas vezes">
+                        <Select value={String(i.clientPayInstallments)} disabled={!i.clientPayMethod} onChange={(e) => updateItem(i.uid, { clientPayInstallments: Number(e.target.value) })}>
+                          {Array.from({ length: 36 }, (_, k) => k + 1).map((n) => (
+                            <option key={n} value={n}>
+                              {n === 1 ? "À vista (1x)" : `${n}x`}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </div>
+                  )}
                   <ItemMoneySummary item={i} supplierName={tourSuppliers.find((s) => s.id === i.supplierId)?.name} />
                   {i.supplierPayment === "A_VISTA" && (
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -997,6 +1026,7 @@ export function SaleForm({
                       • {PRODUCT_TYPES.label(i.productType)}
                       {i.description ? `: ${i.description}` : ""}: cliente paga <b className="tabular">{formatBRL(i.priceCents)}</b> direto ao fornecedor{" "}
                       {tourSuppliers.find((s) => s.id === i.supplierId)?.name ?? ""}
+                      {i.clientPayMethod ? ` (${PAYMENT_METHODS.label(i.clientPayMethod)}${i.clientPayInstallments > 1 ? ` em ${i.clientPayInstallments}x` : " à vista"})` : ""}
                       {i.supplierCommissionCents > 0 && (
                         <>
                           {" "}
