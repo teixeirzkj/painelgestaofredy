@@ -97,8 +97,27 @@ function planLines(plan: PlanRow[]) {
   return plan.map((p, idx) => `${idx + 1}) ${formatBRL(p.amountCents)} em ${formatDate(p.dueDate)} via ${PAYMENT_METHODS.label(p.method)}`).join("\n");
 }
 
+type PayItem = { productType: string; description: string | null; priceCents: number; supplierPayment: string; supplier: { name: string } | null };
+
+/**
+ * Condições de pagamento do contrato: as parcelas que a agência recebe e, à parte, os produtos que o cliente paga
+ * direto ao fornecedor (esses não geram parcelas na agência, então sem isto o contrato ficava sempre "em branco").
+ */
+export function paymentText(planJson: string, items: PayItem[]) {
+  const plan = JSON.parse(planJson) as PlanRow[];
+  const direct = items.filter((i) => i.supplierPayment === "CLIENTE_DIRETO" && i.priceCents > 0);
+  const parts: string[] = [];
+  if (plan.length) parts.push(direct.length ? `Pago à agência:\n${planLines(plan)}` : planLines(plan));
+  if (direct.length) {
+    const lines = direct.map(
+      (i) => `- ${PRODUCT_TYPES.label(i.productType)}${i.description ? `: ${i.description}` : ""} — ${formatBRL(i.priceCents)}, pago pelo cliente diretamente ${i.supplier ? `ao fornecedor ${i.supplier.name}` : "ao fornecedor"}`,
+    );
+    parts.push(`Pago pelo cliente diretamente ao fornecedor, conforme as condições do fornecedor:\n${lines.join("\n")}`);
+  }
+  return parts.join("\n\n");
+}
+
 export function buildVariables(sale: SaleForContract): Record<string, string> {
-  const plan = JSON.parse(sale.paymentPlanJson) as PlanRow[];
   return {
     ...agencyVars(sale.company),
     ...clientVars(sale.client),
@@ -111,7 +130,7 @@ export function buildVariables(sale: SaleForContract): Record<string, string> {
     "venda.localizador": sale.locator ?? "",
     "venda.valor_total": formatBRL(sale.grossCents),
     "venda.produtos": sale.items.map(itemLine).join("\n"),
-    "venda.pagamento": plan.length ? planLines(plan) : "",
+    "venda.pagamento": paymentText(sale.paymentPlanJson, sale.items),
     "venda.lista_passageiros": sale.passengers.map((p) => `- ${p.name}`).join("\n"),
     "vendedor.nome": sale.seller.name,
   };
@@ -136,9 +155,9 @@ export function buildTripVariables(trip: { code: string; destination: string | n
   const locators = uniq(sales.flatMap((s) => [s.locator, ...s.items.map((i) => i.locator)]).filter(Boolean) as string[]);
   const payments = sales
     .map((s) => {
-      const plan = JSON.parse(s.paymentPlanJson) as PlanRow[];
-      if (!plan.length) return "";
-      return multi ? `Venda ${s.code} (${PRODUCT_TYPES.label(s.mainProductType)}):\n${planLines(plan)}` : planLines(plan);
+      const text = paymentText(s.paymentPlanJson, s.items);
+      if (!text) return "";
+      return multi ? `Venda ${s.code} (${PRODUCT_TYPES.label(s.mainProductType)}):\n${text}` : text;
     })
     .filter(Boolean);
   return {

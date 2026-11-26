@@ -931,7 +931,9 @@ export function SaleForm({
 
         <Section icon={CreditCard} step={4} title="Pagamento do cliente" description={`Valor a receber pela agência: ${formatBRL(totals.clientPayableCents)}`}>
           {totals.clientPayableCents === 0 ? (
-            <p className="text-sm text-muted">Nenhum valor a receber pela agência (itens pagos diretamente ao fornecedor).</p>
+            <p className="text-sm text-muted">
+              Nenhum valor a receber pela agência (itens pagos diretamente ao fornecedor). Não é preciso gerar parcelas: o contrato informa que o pagamento é feito pelo cliente direto ao fornecedor. A comissão do fornecedor fica no produto; não lance como taxa de serviço, que é cobrada do cliente.
+            </p>
           ) : (
             <>
               <div className="mb-4 grid gap-3 rounded-xl border border-line bg-slate-50/60 p-4 sm:grid-cols-2 lg:grid-cols-5">
