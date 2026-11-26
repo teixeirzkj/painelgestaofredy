@@ -178,6 +178,7 @@ function pickRule(rules: Rule[], supplierId: string, productType: string) {
 
 function Section({ icon: Icon, title, description, children, aside, step }: { icon: React.ElementType; title: string; description?: string; children: React.ReactNode; aside?: React.ReactNode; step?: number }) {
   return (
+    <div id={step ? `secao-${step}` : undefined} className="scroll-mt-24 rounded-[14px]">
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
         <div className="flex items-center gap-3">
@@ -194,6 +195,7 @@ function Section({ icon: Icon, title, description, children, aside, step }: { ic
       </div>
       <div className="p-5">{children}</div>
     </Card>
+    </div>
   );
 }
 

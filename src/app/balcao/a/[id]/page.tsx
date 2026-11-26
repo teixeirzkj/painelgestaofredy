@@ -26,6 +26,19 @@ import { balcaoContext } from "../../shared";
 import { BalcaoHeader, StepBox } from "../../header";
 import { AttachDraftButton, AutoClose, DiscardFlowButton, FlowMarkButton, PrepareContractButton, SendViaFredyButton } from "../../flow-buttons";
 import { GenerateTripContractButton } from "@/components/trip-contract-button";
+import { AutoRefreshContract } from "./auto-refresh-contract";
+
+/** Campo do contrato que se corrige no cadastro do cliente (etapa 2), e não na venda. */
+const isClientField = (m: string) => /cliente|cpf|cnpj|passaporte|rne|documento|endere|nascimento|nacionalidade|e-mail|telefone/i.test(m);
+/** Seção do formulário da venda (âncora secao-N) onde se corrige cada campo do contrato. */
+/** Destaque da seção a corrigir (classes fixas para o Tailwind gerar). */
+const FOCUS: Record<string, string> = {
+  "1": "[&_#secao-1]:ring-4 [&_#secao-1]:ring-amber-300",
+  "2": "[&_#secao-2]:ring-4 [&_#secao-2]:ring-amber-300",
+  "4": "[&_#secao-4]:ring-4 [&_#secao-4]:ring-amber-300",
+  "5": "[&_#secao-5]:ring-4 [&_#secao-5]:ring-amber-300",
+};
+const saleSection = (m: string) => (/pagamento/i.test(m) ? 4 : /produto|valor/i.test(m) ? 2 : /lista de passageiros/i.test(m) ? 5 : 1);
 
 const btn = "inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold";
 
@@ -48,6 +61,11 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
     <GenerateTripContractButton tripId={d.tripOffer.tripId} codes={d.tripOffer.codes} openAfter={false} label="Juntar com as outras vendas da viagem em um contrato só" />
   );
   const reviewing = view !== d.current;
+  // veio do aviso do contrato para corrigir algo: ao salvar, volta para o contrato com a prévia atualizada
+  const fixing = str(sp, "voltar") === "contrato";
+  const backToContract = `${base}?etapa=5&atualizar=1`;
+  const fixWhat = str(sp, "falta");
+  const focusClass = fixing ? (FOCUS[str(sp, "secao") ?? ""] ?? "") : "";
   const goCurrent = (
     <Link href={base} className={`${btn} bg-brand-600 text-white hover:bg-brand-700`}>
       {d.current >= DONE_STEP ? "Voltar ao resumo" : `Ir para a etapa ${d.current}: ${BALCAO_STEPS[d.current - 1]}`} <ArrowRight className="h-4 w-4" />
@@ -92,7 +110,22 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
         </div>
         {d.missing.length > 0 && <p className="border-t border-line bg-amber-50 px-5 py-2 text-sm text-amber-900">Falta no cadastro: <strong>{d.missing.join(" e ")}</strong>. Clique em Editar e complete para continuar.</p>}
         {d.missing.length === 0 && d.warnings.length > 0 && <p className="border-t border-line bg-slate-50 px-5 py-2 text-sm text-slate-600">Sem {d.warnings.join(" e ")} no cadastro. Dá para continuar e completar depois, mas o contrato precisa desse dado para ser emitido.</p>}
-        {footer(reviewing ? goCurrent : <FlowMarkButton id={flowId} mark="data" label="Dados conferidos, continuar" disabled={d.missing.length > 0} />)}
+        {fixing && (
+          <p className="border-t border-line bg-amber-50 px-5 py-2 text-sm text-amber-900">
+            Corrigindo para o contrato{fixWhat ? `: ${fixWhat}` : ""}. Clique em Editar, complete e salve; depois volte para o contrato.
+          </p>
+        )}
+        {footer(
+          fixing ? (
+            <Link href={backToContract} className={`${btn} bg-brand-600 text-white hover:bg-brand-700`}>
+              Voltar para o contrato atualizado <ArrowRight className="h-4 w-4" />
+            </Link>
+          ) : reviewing ? (
+            goCurrent
+          ) : (
+            <FlowMarkButton id={flowId} mark="data" label="Dados conferidos, continuar" disabled={d.missing.length > 0} />
+          ),
+        )}
       </StepBox>
     );
   } else if (view === 3) {
@@ -117,13 +150,16 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
       void _s;
       body = (
         <div className="space-y-4">
-          <StepBox n={4} title="Ajustar a venda" steps={["Corrija o que precisar (passageiros, datas, valores, pagamento) e clique em salvar.", "Depois, na etapa 5, atualize a prévia e emita o contrato de novo."]}>
+          <StepBox n={4} title="Ajustar a venda" steps={fixing ? ["Preencha o que está faltando (a seção fica destacada em amarelo).", "Clique em Salvar alterações: você volta para o contrato com a prévia já atualizada."] : ["Corrija o que precisar (passageiros, datas, valores, pagamento) e clique em salvar.", "Depois, na etapa 5, atualize a prévia e emita o contrato de novo."]}>
+            {fixing && fixWhat && <p className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-sm text-amber-900">Falta no contrato: <strong>{fixWhat}</strong>.</p>}
             <p className="px-5 py-3 text-sm text-slate-600">
               Venda {sale.code} já confirmada.{" "}
               {contract && ["AGUARDANDO_ENVIO"].includes(contract.status) ? "O contrato já emitido fica marcado como desatualizado e precisa ser emitido de novo." : ""}
             </p>
           </StepBox>
-          <SaleForm {...form} afterSaveHref={base} />
+          <div className={focusClass}>
+            <SaleForm {...form} afterSaveHref={fixing ? backToContract : base} />
+          </div>
         </div>
       );
     } else if (sale && sale.status !== "ORCAMENTO") {
@@ -278,16 +314,39 @@ export default async function BalcaoAtendimentoPage({ params, searchParams }: { 
                 ))}
               {missing.length > 0 && (
                 <p>
-                  <strong>Falta para emitir:</strong> {missing.join(", ")}. {missing.some((m) => /cliente|cpf|passaporte|rne|documento|endere/i.test(m)) && <Link href={`${base}?etapa=2`} className="underline">Completar o cliente</Link>}
+                  <strong>Falta para emitir:</strong> {missing.join(", ")}.
                 </p>
               )}
               {blanks.length > 0 && (
                 <p>
-                  <strong>Em branco no contrato:</strong> {blanks.join(", ")}. Se precisar, volte para a venda e preencha.
+                  <strong>Em branco no contrato:</strong> {blanks.join(", ")}.
                 </p>
+              )}
+              {(missing.length > 0 || blanks.length > 0) && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="text-xs">Corrigir agora:</span>
+                  {/* dados do cliente se corrigem na etapa 2; o resto (pagamento, passageiros, datas, valores, produtos) na venda, etapa 4 */}
+                  {[...missing, ...blanks].some(isClientField) && (
+                    <Link href={`${base}?etapa=2&voltar=contrato&falta=${encodeURIComponent([...new Set([...missing, ...blanks].filter(isClientField))].join(", "))}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 hover:bg-amber-100">
+                      <UserRound className="h-3.5 w-3.5" /> Completar o cliente
+                    </Link>
+                  )}
+                  {[...missing, ...blanks].some((m) => !isClientField(m)) && (
+                    <Link
+                      href={(() => {
+                        const items = [...new Set([...missing, ...blanks].filter((m) => !isClientField(m)))];
+                        const n = saleSection(items[0]);
+                        return `${base}?etapa=4&voltar=contrato&secao=${n}&falta=${encodeURIComponent(items.join(", "))}#secao-${n}`;
+                      })()}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white hover:bg-amber-700">
+                      <ArrowLeft className="h-3.5 w-3.5" /> Ajustar a venda ({[...new Set([...missing, ...blanks].filter((m) => !isClientField(m)))].join(", ").toLowerCase()})
+                    </Link>
+                  )}
+                </div>
               )}
             </div>
           )}
+          {str(sp, "atualizar") === "1" && ["NAO_GERADO", "EM_PREPARACAO", "AGUARDANDO_ENVIO"].includes(full.status) && <AutoRefreshContract id={full.id} next={base} />}
           <div className="print-area">
             <div className="no-print flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
               <p className="flex flex-1 items-center gap-2 text-sm font-semibold text-ink">
