@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/dates";
 import { PAYMENT_METHODS, PRODUCT_TYPES } from "@/lib/constants";
 import { formatDocument } from "@/lib/utils";
 import { clientIdentity } from "@/lib/client-identity";
+import { clientPayText, parseClientPays } from "@/lib/client-pay";
 import { PRODUCT_TYPES as PT } from "@/lib/constants";
 import { SUGGESTED_TEMPLATES, SUGGESTED_TEMPLATE_BODY } from "./contract-defaults";
 
@@ -105,15 +106,13 @@ type PayItem = {
   priceCents: number;
   supplierPayment: string;
   supplier: { name: string } | null;
-  clientPayMethod?: string | null;
-  clientPayInstallments?: number | null;
+  clientPaymentsJson?: string | null;
 };
 
-/** ", via Cartão de crédito em 10x" — como o cliente paga o fornecedor, quando informado. */
+/** ", via Cartão de crédito em 10x + Pontos / milhas" — como o cliente paga o fornecedor, quando informado. */
 function clientPayWay(i: PayItem) {
-  if (!i.clientPayMethod) return "";
-  const n = i.clientPayInstallments ?? 1;
-  return `, via ${PAYMENT_METHODS.label(i.clientPayMethod)}${n > 1 ? ` em ${n}x` : " à vista"}`;
+  const text = clientPayText(parseClientPays(i.clientPaymentsJson));
+  return text ? `, via ${text}` : "";
 }
 
 /**

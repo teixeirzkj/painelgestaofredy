@@ -21,8 +21,21 @@ describe("condições de pagamento no contrato", () => {
     expect(t).toContain("Pago pelo cliente diretamente ao fornecedor");
   });
   it("forma e parcelas que o cliente paga ao fornecedor vão para o contrato", () => {
-    expect(paymentText("[]", [{ ...aereo, clientPayMethod: "CARTAO_CREDITO", clientPayInstallments: 10 }])).toMatch(/via Cartão de crédito em 10x$/);
-    expect(paymentText("[]", [{ ...aereo, clientPayMethod: "PIX", clientPayInstallments: 1 }])).toMatch(/via PIX à vista$/);
+    const pays = (l: object[]) => ({ ...aereo, clientPaymentsJson: JSON.stringify(l) });
+    expect(paymentText("[]", [pays([{ method: "CARTAO_CREDITO", amountCents: 0, installments: 10 }])])).toMatch(/via Cartão de crédito em 10x$/);
+    expect(paymentText("[]", [pays([{ method: "PIX", amountCents: 0, installments: 1 }])])).toMatch(/via PIX$/);
+  });
+  it("mais de uma forma: cartão + pontos, com valores e detalhe", () => {
+    const t = paymentText("[]", [
+      {
+        ...aereo,
+        clientPaymentsJson: JSON.stringify([
+          { method: "CARTAO_CREDITO", amountCents: 1000000, installments: 10 },
+          { method: "PONTOS", amountCents: 255247, installments: 1, note: "80 mil pontos Smiles" },
+        ]),
+      },
+    ]);
+    expect(t).toMatch(/via Cartão de crédito de R\$\s?10\.000,00 em 10x \+ Pontos \/ milhas de R\$\s?2\.552,47 \(80 mil pontos Smiles\)$/);
   });
   it("a linha [MODELO SUGERIDO] dos modelos antigos não aparece no contrato", () => {
     const body = "CONTRATO\n[MODELO SUGERIDO: submeta à revisão jurídica da agência antes do uso e apague esta linha]\n\nCONTRATADA: {{agencia.nome}}";

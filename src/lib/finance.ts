@@ -30,6 +30,7 @@
 
 import { applyBps, ratioBps, sum } from "./money";
 import type { CommercialModel, SupplierPayment } from "./constants";
+import { canSplit, type ClientPay } from "./client-pay";
 
 export type SaleItemInput = {
   commercialModel: CommercialModel;
@@ -186,8 +187,7 @@ export type SupplierPaymentFields = {
   supplierCardInstallments?: number | null;
   supplierCardStartInstallment?: number | null;
   supplierCardFirstBillMonth?: string | null;
-  clientPayMethod?: string | null;
-  clientPayInstallments?: number | null;
+  clientPayments?: ClientPay[];
 };
 
 /**
@@ -212,8 +212,10 @@ export function normalizeSupplierPayment<T extends SupplierPaymentFields>(i: T) 
     supplierCardInstallments: card ? Math.min(Math.max(i.supplierCardInstallments || 1, 1), 24) : 1,
     supplierCardStartInstallment: card ? Math.max(i.supplierCardStartInstallment || 1, 1) : 1,
     supplierCardFirstBillMonth: card ? i.supplierCardFirstBillMonth || null : null,
-    clientPayMethod: pay === "CLIENTE_DIRETO" ? i.clientPayMethod || null : null,
-    clientPayInstallments: pay === "CLIENTE_DIRETO" && i.clientPayMethod ? Math.min(Math.max(i.clientPayInstallments || 1, 1), 36) : 1,
+    clientPayments:
+      pay === "CLIENTE_DIRETO"
+        ? (i.clientPayments ?? []).map((p) => ({ ...p, installments: canSplit(p.method) ? Math.min(Math.max(p.installments || 1, 1), 36) : 1 }))
+        : [],
   };
 }
 

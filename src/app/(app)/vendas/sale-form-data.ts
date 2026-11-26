@@ -9,6 +9,7 @@ import { excursionOptions } from "@/server/services/excursions";
 import { cardOptions } from "@/server/services/cards";
 import type { CommercialModel, SupplierPayment } from "@/lib/constants";
 import { clientDocHint, type IdentityInput } from "@/lib/client-identity";
+import { parseClientPays } from "@/lib/client-pay";
 import type { SaleFormInitial } from "./sale-form";
 
 /** Só o que a tela da venda precisa; passaporte e RNE vão mascarados (docHint). */
@@ -107,8 +108,7 @@ export async function editSaleFormData(ctx: Ctx, id: string) {
       supplierCardInstallments: i.supplierCardInstallments,
       supplierCardStartInstallment: i.supplierCardStartInstallment,
       supplierCardFirstBillMonth: i.supplierCardFirstBillMonth ?? "",
-      clientPayMethod: i.clientPayMethod ?? "",
-      clientPayInstallments: i.clientPayInstallments,
+      clientPayments: parseClientPays(i.clientPaymentsJson),
     })),
     payments: sale.plan,
     passengers: sale.passengers.map((p) => ({

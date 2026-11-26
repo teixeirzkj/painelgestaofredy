@@ -15,6 +15,7 @@ import {
   SUPPLIER_CASH_METHODS,
 } from "@/lib/constants";
 import { normalizeSupplierPayment } from "@/lib/finance";
+import { CLIENT_PAY_METHOD_VALUES } from "@/lib/client-pay";
 import { isIsoDate } from "@/lib/dates";
 import { isValidDocument, onlyDigits } from "@/lib/utils";
 import { normalizeDocCode, normalizeGender } from "@/lib/client-identity";
@@ -64,8 +65,17 @@ export const saleItemSchema = z.object({
   supplierCardStartInstallment: z.number().int().min(1, "Parcela inválida.").max(24, "Parcela inválida.").default(1),
   supplierCardFirstBillMonth: billMonth.optional().nullable().or(z.literal("")).transform((v) => v || null),
   // cliente paga direto ao fornecedor: forma e parcelas (só informativo, vai para o contrato)
-  clientPayMethod: z.enum(PAYMENT_METHODS.values).optional().nullable().or(z.literal("")).transform((v) => v || null),
-  clientPayInstallments: z.number().int().min(1, "Parcelas inválidas.").max(36, "No máximo 36 parcelas.").default(1),
+  clientPayments: z
+    .array(
+      z.object({
+        method: z.enum(CLIENT_PAY_METHOD_VALUES),
+        amountCents: cents.default(0),
+        installments: z.number().int().min(1, "Parcelas inválidas.").max(36, "No máximo 36 parcelas.").default(1),
+        note: optText(80),
+      }),
+    )
+    .max(6, "No máximo 6 formas de pagamento.")
+    .default([]),
 })
   .transform((i) => normalizeSupplierPayment(i))
   .superRefine((i, c) => {

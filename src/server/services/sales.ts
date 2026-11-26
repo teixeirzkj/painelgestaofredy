@@ -151,8 +151,7 @@ function supplierPaymentData(i: SaleParsed["items"][number]) {
     supplierCardInstallments: i.supplierCardInstallments,
     supplierCardStartInstallment: i.supplierCardStartInstallment,
     supplierCardFirstBillMonth: i.supplierCardFirstBillMonth,
-    clientPayMethod: i.clientPayMethod,
-    clientPayInstallments: i.clientPayInstallments,
+    clientPaymentsJson: JSON.stringify(i.clientPayments ?? []),
   };
 }
 

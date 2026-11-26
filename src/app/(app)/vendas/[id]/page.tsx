@@ -10,6 +10,7 @@ import { Card, CardHeader, DataList, LinkButton, Notice, PageHeader, Table, Td, 
 import { ContractStatusBadge, EntryStatusBadge, FinancialStatusBadge, SaleStatusBadge } from "@/components/status";
 import { AttachmentsPanel } from "@/components/attachments";
 import { formatBRL, formatPercentBps, sum } from "@/lib/money";
+import { clientPayText, parseClientPays } from "@/lib/client-pay";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { COMMERCIAL_MODELS, PAYABLE_CATEGORIES, PAYMENT_METHODS, PRODUCT_TYPES, RECEIVABLE_CATEGORIES } from "@/lib/constants";
 import { displayStatus } from "@/lib/finance";
@@ -46,15 +47,17 @@ const ACTION_LABEL: Record<string, string> = {
 function supplierPaymentText(i: {
   supplierPayment: string;
   supplierPayMethod: string | null;
-  clientPayMethod: string | null;
-  clientPayInstallments: number;
+  clientPaymentsJson: string;
   supplierCardInstallments: number;
   supplierCardStartInstallment: number;
   supplierCardAccount: { name: string } | null;
 }) {
   switch (i.supplierPayment) {
     case "CLIENTE_DIRETO":
-      return `pago pelo cliente direto${i.clientPayMethod ? ` · ${PAYMENT_METHODS.label(i.clientPayMethod)}${i.clientPayInstallments > 1 ? ` em ${i.clientPayInstallments}x` : " à vista"}` : ""}`;
+    {
+      const how = clientPayText(parseClientPays(i.clientPaymentsJson));
+      return `pago pelo cliente direto${how ? ` · ${how}` : ""}`;
+    }
     case "CARTAO_AGENCIA": {
       const start = i.supplierCardStartInstallment > 1 ? ` (a partir da ${i.supplierCardStartInstallment}ª)` : "";
       const parts = i.supplierCardInstallments > 1 ? ` · ${i.supplierCardInstallments}x${start}` : "";

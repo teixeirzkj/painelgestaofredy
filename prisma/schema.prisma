@@ -334,8 +334,7 @@ model SaleItem {
   supplierCardInstallments     Int               @default(1) // CARTAO_AGENCIA: parcelas na fatura
   supplierCardStartInstallment Int               @default(1) // CARTAO_AGENCIA, venda antiga: parcela em que a compra está (1 = compra nova)
   supplierCardFirstBillMonth   String? // CARTAO_AGENCIA, venda antiga: fatura (AAAA-MM) da 1ª parcela lançada
-  clientPayMethod              String? // CLIENTE_DIRETO: como o cliente paga o fornecedor (PAYMENT_METHODS), só informativo (contrato)
-  clientPayInstallments        Int               @default(1) // CLIENTE_DIRETO: em quantas vezes o cliente paga o fornecedor
+  clientPaymentsJson           String            @default("[]") // CLIENTE_DIRETO: formas com que o cliente paga o fornecedor [{method, amountCents, installments, note}] (só informativo, vai para o contrato)
   locator                      String?
   mondeProductId               String? // id do produto da venda no Monde (importação)
   sortOrder                    Int               @default(0)

@@ -42,6 +42,7 @@ import {
 import { billMonthLabel, billMonthOf, cardPlan } from "@/lib/card-bills";
 import { cn, formatDocument, newKey } from "@/lib/utils";
 import { AiImport } from "./ai-import";
+import { CLIENT_PAY_METHODS, CLIENT_PAY_METHOD_VALUES, canSplit, clientPayText, type ClientPay } from "@/lib/client-pay";
 import type { SaleExtraction } from "@/server/services/ai-extract";
 
 type Item = {
@@ -74,8 +75,7 @@ type SupplierPayFields = {
   supplierCardInstallments: number;
   supplierCardStartInstallment: number;
   supplierCardFirstBillMonth: string;
-  clientPayMethod: string;
-  clientPayInstallments: number;
+  clientPayments: ClientPay[];
 };
 type AgencyCard = { id: string; name: string; closingDay: number | null; dueDay: number | null; ready: boolean };
 type Payment = { key: string; dueDate: string; amountCents: number; method: string; description?: string | null; payerClientId?: string | null };
@@ -134,8 +134,7 @@ const blankItem = (patch: Partial<Item> = {}): Item => ({
   supplierCardInstallments: 1,
   supplierCardStartInstallment: 1,
   supplierCardFirstBillMonth: "",
-  clientPayMethod: "",
-  clientPayInstallments: 1,
+  clientPayments: [],
   ...(Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<Item>),
 });
 
@@ -517,8 +516,10 @@ export function SaleForm({
         supplierCardInstallments: i.supplierPayment === "CARTAO_AGENCIA" ? i.supplierCardInstallments : 1,
         supplierCardStartInstallment: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardStartInstallment : 1,
         supplierCardFirstBillMonth: i.supplierPayment === "CARTAO_AGENCIA" && cardOld && i.supplierCardInstallments > 1 ? i.supplierCardFirstBillMonth || null : null,
-        clientPayMethod: i.supplierPayment === "CLIENTE_DIRETO" ? i.clientPayMethod || null : null,
-        clientPayInstallments: i.supplierPayment === "CLIENTE_DIRETO" && i.clientPayMethod ? i.clientPayInstallments : 1,
+        clientPayments:
+          i.supplierPayment === "CLIENTE_DIRETO"
+            ? i.clientPayments.map((p) => ({ method: p.method, amountCents: i.clientPayments.length > 1 ? p.amountCents : 0, installments: canSplit(p.method) ? p.installments : 1, note: p.note || null }))
+            : [],
         costCents: i.commercialModel === "COMISSAO" ? 0 : i.costCents,
         supplierCommissionCents: i.commercialModel === "COMISSAO" ? i.supplierCommissionCents : 0,
         cardFeeCents: i.commercialModel === "COMISSAO" ? i.cardFeeCents : 0,
@@ -774,29 +775,7 @@ export function SaleForm({
                       </Field>
                     )}
                   </div>
-                  {i.supplierPayment === "CLIENTE_DIRETO" && (
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      <Field label="Como o cliente paga o fornecedor" hint="vai para o contrato">
-                        <Select value={i.clientPayMethod} onChange={(e) => updateItem(i.uid, { clientPayMethod: e.target.value })}>
-                          <option value="">Não informar</option>
-                          {PAYMENT_METHODS.values.map((v) => (
-                            <option key={v} value={v}>
-                              {PAYMENT_METHODS.label(v)}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="Em quantas vezes">
-                        <Select value={String(i.clientPayInstallments)} disabled={!i.clientPayMethod} onChange={(e) => updateItem(i.uid, { clientPayInstallments: Number(e.target.value) })}>
-                          {Array.from({ length: 36 }, (_, k) => k + 1).map((n) => (
-                            <option key={n} value={n}>
-                              {n === 1 ? "À vista (1x)" : `${n}x`}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                    </div>
-                  )}
+                  {i.supplierPayment === "CLIENTE_DIRETO" && <ClientPaysEditor item={i} onChange={(clientPayments) => updateItem(i.uid, { clientPayments })} />}
                   <ItemMoneySummary item={i} supplierName={tourSuppliers.find((s) => s.id === i.supplierId)?.name} />
                   {i.supplierPayment === "A_VISTA" && (
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1026,7 +1005,7 @@ export function SaleForm({
                       • {PRODUCT_TYPES.label(i.productType)}
                       {i.description ? `: ${i.description}` : ""}: cliente paga <b className="tabular">{formatBRL(i.priceCents)}</b> direto ao fornecedor{" "}
                       {tourSuppliers.find((s) => s.id === i.supplierId)?.name ?? ""}
-                      {i.clientPayMethod ? ` (${PAYMENT_METHODS.label(i.clientPayMethod)}${i.clientPayInstallments > 1 ? ` em ${i.clientPayInstallments}x` : " à vista"})` : ""}
+                      {clientPayText(i.clientPayments) ? ` (${clientPayText(i.clientPayments)})` : ""}
                       {i.supplierCommissionCents > 0 && (
                         <>
                           {" "}
@@ -1373,6 +1352,92 @@ function PercentInput({ bps, onChange, disabled }: { bps: number; onChange: (bps
         className="pr-7 text-right"
       />
       <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">%</span>
+    </div>
+  );
+}
+
+/**
+ * Como o cliente paga o fornecedor (pagamento direto): uma ou mais formas — cartão + pontos, cartão + pix...
+ * Com uma forma só, ela vale para o valor todo; com duas, mudar o valor de uma ajusta a outra.
+ */
+function ClientPaysEditor({ item: i, onChange }: { item: Item; onChange: (list: ClientPay[]) => void }) {
+  const list = i.clientPayments;
+  const multi = list.length > 1;
+  const total = sum(list.map((p) => p.amountCents));
+  const set = (idx: number, patch: Partial<ClientPay>) => {
+    let next = list.map((p, k) => (k === idx ? { ...p, ...patch } : p));
+    if (patch.amountCents !== undefined && next.length === 2) {
+      const other = 1 - idx;
+      next = next.map((p, k) => (k === other ? { ...p, amountCents: Math.max(0, i.priceCents - (patch.amountCents ?? 0)) } : p));
+    }
+    onChange(next);
+  };
+  const add = () => {
+    if (!list.length) return onChange([{ method: "CARTAO_CREDITO", amountCents: 0, installments: 1, note: "" }]);
+    const base = list.length === 1 ? [{ ...list[0], amountCents: i.priceCents }] : list;
+    onChange([...base, { method: "PIX", amountCents: Math.max(0, i.priceCents - sum(base.map((p) => p.amountCents))), installments: 1, note: "" }]);
+  };
+  return (
+    <div className="mt-3 rounded-lg border border-line bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-700">
+          Como o cliente paga o fornecedor <span className="font-normal text-muted">· vai para o contrato</span>
+        </span>
+        {multi && (
+          <span className={cn("text-xs tabular", total > i.priceCents ? "text-amber-800" : "text-muted")}>
+            Somando as formas: {formatBRL(total)} de {formatBRL(i.priceCents)}
+          </span>
+        )}
+      </div>
+      {list.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {list.map((p, idx) => (
+            <div key={idx} className={cn("rounded-lg", multi && "border border-line bg-slate-50/50 p-2.5")}>
+              <div className="grid items-end gap-2 sm:grid-cols-3">
+                <Field label={multi ? `Forma ${idx + 1}` : "Forma"}>
+                  <Select value={p.method} onChange={(e) => set(idx, { method: e.target.value, installments: canSplit(e.target.value) ? p.installments : 1 })}>
+                    {CLIENT_PAY_METHOD_VALUES.map((v) => (
+                      <option key={v} value={v}>
+                        {CLIENT_PAY_METHODS[v]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {multi && (
+                  <Field label="Valor (R$)">
+                    <MoneyInput value={p.amountCents} onChange={(v) => set(idx, { amountCents: v })} />
+                  </Field>
+                )}
+                {canSplit(p.method) && (
+                  <Field label="Vezes">
+                    <Select value={String(p.installments)} onChange={(e) => set(idx, { installments: Number(e.target.value) })}>
+                      {Array.from({ length: 36 }, (_, k) => k + 1).map((n) => (
+                        <option key={n} value={n}>
+                          {n === 1 ? "À vista" : `${n}x`}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+              </div>
+              <div className="mt-2 flex items-end gap-2">
+                <Field label="Detalhe (opcional)" className="flex-1">
+                  <Input value={p.note ?? ""} maxLength={80} onChange={(e) => set(idx, { note: e.target.value })} placeholder={p.method === "PONTOS" ? "Ex.: 80 mil pontos Smiles" : "Ex.: cartão do marido"} />
+                </Field>
+                <Button type="button" variant="ghost" size="sm" onClick={() => onChange(list.filter((_, k) => k !== idx))} aria-label="Remover forma de pagamento" className="mb-0.5">
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {list.length < 6 && (
+        <button type="button" onClick={add} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+          <Plus className="h-3.5 w-3.5" /> {list.length ? "Outra forma de pagamento (ex.: cartão + pontos)" : "Informar como o cliente paga"}
+        </button>
+      )}
+      {list.length > 0 && <p className="mt-2 text-xs text-muted">No contrato: “{clientPayText(list)}”</p>}
     </div>
   );
 }
