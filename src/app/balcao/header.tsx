@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Check, IdCard, LogOut, Plane } from "lucide-react";
+import { Check, IdCard, LogOut, Plane, Users, Workflow } from "lucide-react";
 import { prisma } from "@/server/db";
 import type { Ctx } from "@/server/context";
 import { BALCAO_STEPS } from "@/server/services/balcao";
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * Cabeçalho da venda rápida com as 7 etapas: a feita vira um círculo verde, a que está na tela mostra o nome,
  * as próximas ficam só com o número. Dentro de um atendimento, as etapas feitas são clicáveis (para rever).
  */
-export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/balcao/ficha" }: { ctx: Ctx; view: number; done: boolean[]; baseHref?: string; sheetHref?: string | null }) {
+export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/balcao/ficha", showSteps = true }: { ctx: Ctx; view: number; done: boolean[]; baseHref?: string; sheetHref?: string | null; showSteps?: boolean }) {
   const company = await prisma.company.findUnique({ where: { id: ctx.companyId }, select: { name: true, tradeName: true } });
   return (
     <header className="no-print sticky top-0 z-20 border-b border-line bg-white/95 backdrop-blur">
@@ -24,7 +24,8 @@ export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/ba
             <span className="block text-[11px] text-muted">{company?.tradeName || company?.name}</span>
           </span>
         </span>
-        <ol className="flex flex-1 flex-wrap items-center justify-center gap-1.5 text-xs" aria-label="Etapas do atendimento">
+        {!showSteps && <span className="flex-1" />}
+        {showSteps && <ol className="flex flex-1 flex-wrap items-center justify-center gap-1.5 text-xs" aria-label="Etapas do atendimento">
           {BALCAO_STEPS.map((name, i) => {
             const n = i + 1;
             const isView = n === view;
@@ -67,7 +68,7 @@ export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/ba
               </li>
             );
           })}
-        </ol>
+        </ol>}
         {sheetHref && (
           <Link href={sheetHref} className="inline-flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-ink hover:bg-slate-50" title="Dados de todos os passageiros da viagem, prontos para copiar">
             <IdCard className="h-3.5 w-3.5" /> Ficha dos passageiros
@@ -80,6 +81,29 @@ export async function BalcaoHeader({ ctx, view, done, baseHref, sheetHref = "/ba
         </form>
       </div>
     </header>
+  );
+}
+
+/** As duas entradas do popup: o atendimento (orçamento até o contrato) e a área de clientes (só cadastro). */
+export function ModeTabs({ active, attendHref = "/balcao" }: { active: "atendimento" | "clientes"; attendHref?: string }) {
+  const tab = (on: boolean) => cn("flex flex-1 items-start gap-3 rounded-xl border px-4 py-3 text-left transition", on ? "border-brand-500 bg-brand-25 ring-2 ring-brand-100" : "border-line bg-white hover:bg-slate-50");
+  return (
+    <nav className="grid gap-3 sm:grid-cols-2" aria-label="O que você quer fazer">
+      <Link href={attendHref} className={tab(active === "atendimento")} aria-current={active === "atendimento" ? "page" : undefined}>
+        <Workflow className="mt-0.5 h-5 w-5 shrink-0 text-brand-600" />
+        <span>
+          <span className="block font-semibold text-ink">Atendimento</span>
+          <span className="block text-xs text-muted">Orçamento, venda e contrato, nas 7 etapas.</span>
+        </span>
+      </Link>
+      <Link href="/balcao/clientes" className={tab(active === "clientes")} aria-current={active === "clientes" ? "page" : undefined}>
+        <Users className="mt-0.5 h-5 w-5 shrink-0 text-brand-600" />
+        <span>
+          <span className="block font-semibold text-ink">Clientes</span>
+          <span className="block text-xs text-muted">Cadastrar ou atualizar clientes, sem abrir venda nem contrato.</span>
+        </span>
+      </Link>
+    </nav>
   );
 }
 

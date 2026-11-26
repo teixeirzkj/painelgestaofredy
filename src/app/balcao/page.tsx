@@ -12,7 +12,7 @@ import { formatBRL } from "@/lib/money";
 import { onlyDigits } from "@/lib/utils";
 import { str, type SearchParams } from "@/lib/params";
 import { balcaoContext, carry } from "./shared";
-import { BalcaoHeader, StepBox } from "./header";
+import { BalcaoHeader, ModeTabs, StepBox } from "./header";
 import { ClientPicker } from "./client-picker";
 import { DiscardFlowButton } from "./flow-buttons";
 
@@ -51,6 +51,7 @@ export default async function BalcaoInicioPage({ searchParams }: { searchParams:
       <>
         <BalcaoHeader ctx={ctx} view={1} done={[]} />
         <main className="mx-auto max-w-5xl space-y-5 px-4 py-6">
+          <ModeTabs active="atendimento" attendHref={`/balcao${carry(card, keep)}`} />
           <StepBox
             n={1}
             title="Card do cliente no Frédy"
