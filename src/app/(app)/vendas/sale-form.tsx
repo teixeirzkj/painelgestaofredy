@@ -704,21 +704,63 @@ export function SaleForm({
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Como o fornecedor é pago" className="sm:col-span-2" hint={SUPPLIER_PAYMENT_HELP[i.supplierPayment]}>
-                      <Select value={i.supplierPayment} onChange={(e) => changeSupplierPayment(i, e.target.value as SupplierPayment)}>
-                        {SUPPLIER_PAYMENTS.values.map((v) => (
-                          <option key={v} value={v}>
-                            {SUPPLIER_PAYMENTS.label(v)}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="Valor vendido ao cliente (R$)" required error={err(`items.${idx}.priceCents`)} hint="quanto o cliente paga por este produto">
+                    <div className="flex min-w-0 flex-col gap-1.5 sm:col-span-2">
+                      <span className="text-xs font-medium text-slate-700">Quem recebe o dinheiro do cliente?</span>
+                      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Quem recebe o dinheiro do cliente">
+                        {[
+                          { direct: false, label: "A agência", sub: "o cliente paga a agência" },
+                          { direct: true, label: "O fornecedor", sub: "o cliente paga direto a ele" },
+                        ].map((o) => {
+                          const on = (i.supplierPayment === "CLIENTE_DIRETO") === o.direct;
+                          return (
+                            <button
+                              key={o.label}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              onClick={() => !on && changeSupplierPayment(i, o.direct ? "CLIENTE_DIRETO" : "FATURADO")}
+                              className={cn(
+                                "rounded-xl border px-3 py-2 text-left transition",
+                                on ? "border-brand-500 bg-brand-25 ring-2 ring-brand-100" : "border-line bg-white hover:border-brand-200",
+                              )}
+                            >
+                              <span className={cn("block text-sm font-semibold", on ? "text-brand-700" : "text-ink")}>{o.label}</span>
+                              <span className="block text-xs text-muted">{o.sub}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {i.supplierPayment !== "CLIENTE_DIRETO" && (
+                        <Select value={i.supplierPayment} onChange={(e) => changeSupplierPayment(i, e.target.value as SupplierPayment)} aria-label="Como a agência paga o fornecedor">
+                          {SUPPLIER_PAYMENTS.values
+                            .filter((v) => v !== "CLIENTE_DIRETO")
+                            .map((v) => (
+                              <option key={v} value={v}>
+                                {SUPPLIER_PAYMENTS.label(v)}
+                              </option>
+                            ))}
+                        </Select>
+                      )}
+                      <span className="text-xs text-muted">{SUPPLIER_PAYMENT_HELP[i.supplierPayment]}</span>
+                    </div>
+                    <Field label={i.supplierPayment === "CLIENTE_DIRETO" ? "Valor que o cliente paga ao fornecedor (R$)" : "Valor vendido ao cliente (R$)"} required error={err(`items.${idx}.priceCents`)} hint="o preço total deste produto para o cliente">
                       <MoneyInput value={i.priceCents} onChange={(v) => updateItem(i.uid, { priceCents: v })} />
                     </Field>
                     {i.commercialModel === "COMISSAO" ? (
-                      <Field label="Comissão do fornecedor para a agência (R$)" error={err(`items.${idx}.supplierCommissionCents`)} hint={rule && i.autoRule ? `regra do fornecedor: ${formatPercentBps(rule.commissionBps)}${rule.description ? ` (${rule.description})` : ""}` : `o que o fornecedor paga à agência${i.priceCents > 0 ? ` · ${formatPercentBps(Math.round((i.supplierCommissionCents * 10000) / i.priceCents))} do valor vendido` : ""}`}>
+                      <Field
+                        label="Comissão da agência (o fornecedor paga)"
+                        error={err(`items.${idx}.supplierCommissionCents`)}
+                        hint={rule && i.autoRule ? `regra do fornecedor: ${formatPercentBps(rule.commissionBps)}${rule.description ? ` (${rule.description})` : ""}` : undefined}
+                      >
                         <MoneyInput value={i.supplierCommissionCents} onChange={(v) => updateItem(i.uid, { supplierCommissionCents: v, autoRule: false })} />
+                        <span className="flex items-center gap-2 text-xs text-muted">
+                          <span className="whitespace-nowrap">ou em %</span>
+                          <PercentInput
+                            bps={i.priceCents > 0 ? Math.round((i.supplierCommissionCents * 10000) / i.priceCents) : 0}
+                            disabled={i.priceCents <= 0}
+                            onChange={(bps) => updateItem(i.uid, { supplierCommissionCents: applyBps(i.priceCents, bps), autoRule: false })}
+                          />
+                        </span>
                       </Field>
                     ) : (
                       <Field label="Custo do fornecedor (R$)" error={err(`items.${idx}.costCents`)} hint={`o que a agência paga ao fornecedor${i.priceCents > 0 ? ` · lucro da agência: ${formatBRL(i.priceCents - i.costCents)}` : ""}`}>
@@ -726,6 +768,7 @@ export function SaleForm({
                       </Field>
                     )}
                   </div>
+                  <ItemMoneySummary item={i} supplierName={tourSuppliers.find((s) => s.id === i.supplierId)?.name} />
                   {i.supplierPayment === "A_VISTA" && (
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <Field label="Como a agência pagou" required error={err(`items.${idx}.supplierPayMethod`)}>
@@ -881,7 +924,18 @@ export function SaleForm({
 
         <Section icon={Wallet} step={3} title="Valores e comissões" description="Taxa de serviço e desconto do cliente, comissão do vendedor (quanto ele ganha) e do intermediário.">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Taxa de serviço da agência (R$)" hint="cobrada do cliente, além dos produtos">
+            <Field
+              label="Taxa de serviço da agência (R$)"
+              hint={
+                fees > 0 && items.some((i) => i.commercialModel === "COMISSAO" && i.supplierCommissionCents === fees) ? (
+                  <span className="text-amber-800">
+                    Esse valor é igual à comissão do fornecedor, que já está no produto. A taxa de serviço é cobrada do cliente a mais; se não for cobrar nada extra, deixe 0,00.
+                  </span>
+                ) : (
+                  "valor extra cobrado do cliente (não é a comissão do fornecedor)"
+                )
+              }
+            >
               <MoneyInput value={fees} onChange={setFees} />
             </Field>
             <Field label="Desconto dado ao cliente (R$)" error={err("discountCents")} hint="sai do valor que o cliente paga">
@@ -931,9 +985,29 @@ export function SaleForm({
 
         <Section icon={CreditCard} step={4} title="Pagamento do cliente" description={`Valor a receber pela agência: ${formatBRL(totals.clientPayableCents)}`}>
           {totals.clientPayableCents === 0 ? (
-            <p className="text-sm text-muted">
-              Nenhum valor a receber pela agência (itens pagos diretamente ao fornecedor). Não é preciso gerar parcelas: o contrato informa que o pagamento é feito pelo cliente direto ao fornecedor. A comissão do fornecedor fica no produto; não lance como taxa de serviço, que é cobrada do cliente.
-            </p>
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm text-slate-700">
+              <p className="flex items-center gap-2 font-semibold text-emerald-800">
+                <CheckCircle2 className="h-4 w-4" /> Nada a lançar aqui: o cliente paga direto ao fornecedor.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {items
+                  .filter((i) => i.supplierPayment === "CLIENTE_DIRETO" && i.priceCents > 0)
+                  .map((i) => (
+                    <li key={i.uid}>
+                      • {PRODUCT_TYPES.label(i.productType)}
+                      {i.description ? `: ${i.description}` : ""}: cliente paga <b className="tabular">{formatBRL(i.priceCents)}</b> direto ao fornecedor{" "}
+                      {tourSuppliers.find((s) => s.id === i.supplierId)?.name ?? ""}
+                      {i.supplierCommissionCents > 0 && (
+                        <>
+                          {" "}
+                          · agência recebe <b className="tabular">{formatBRL(i.supplierCommissionCents)}</b> de comissão
+                        </>
+                      )}
+                    </li>
+                  ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted">Não precisa gerar parcelas. O contrato já informa que o pagamento é feito direto ao fornecedor.</p>
+            </div>
           ) : (
             <>
               <div className="mb-4 grid gap-3 rounded-xl border border-line bg-slate-50/60 p-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -1243,6 +1317,66 @@ export function SaleForm({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Campo de porcentagem que guarda o texto enquanto a pessoa digita (aceita vírgula). */
+function PercentInput({ bps, onChange, disabled }: { bps: number; onChange: (bps: number) => void; disabled?: boolean }) {
+  const shown = bps ? String(bps / 100).replace(".", ",") : "";
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <div className="relative w-24 shrink-0">
+      <Input
+        inputMode="decimal"
+        aria-label="Comissão em porcentagem"
+        placeholder="0"
+        disabled={disabled}
+        value={text ?? shown}
+        onFocus={() => setText(shown)}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          const v = e.target.value.replace(/[^\d,.]/g, "");
+          setText(v);
+          const n = Number(v.replace(",", "."));
+          if (Number.isFinite(n)) onChange(Math.round(Math.min(100, Math.max(0, n)) * 100));
+        }}
+        className="pr-7 text-right"
+      />
+      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">%</span>
+    </div>
+  );
+}
+
+/** Resumo em palavras de quem paga o quê neste produto. */
+function ItemMoneySummary({ item: i, supplierName }: { item: Item; supplierName?: string }) {
+  if (i.priceCents <= 0) return null;
+  const to = supplierName ? `ao fornecedor ${supplierName}` : "ao fornecedor";
+  if (i.supplierPayment === "CLIENTE_DIRETO") {
+    return (
+      <p className={cn("mt-3 rounded-lg px-3 py-2 text-[13px]", i.supplierCommissionCents > 0 ? "bg-slate-100/70 text-slate-700" : "bg-amber-50 text-amber-800")}>
+        O cliente paga <b className="tabular">{formatBRL(i.priceCents)}</b> direto {to}.{" "}
+        {i.supplierCommissionCents > 0 ? (
+          <>
+            A agência ganha <b className="tabular">{formatBRL(i.supplierCommissionCents)}</b> de comissão, paga pelo fornecedor depois.
+          </>
+        ) : (
+          "Informe a comissão que o fornecedor paga à agência."
+        )}
+      </p>
+    );
+  }
+  const charge = itemCharge(i);
+  return (
+    <p className={cn("mt-3 rounded-lg px-3 py-2 text-[13px]", i.costCents > 0 ? "bg-slate-100/70 text-slate-700" : "bg-amber-50 text-amber-800")}>
+      O cliente paga <b className="tabular">{formatBRL(charge)}</b> à agência.{" "}
+      {i.costCents > 0 ? (
+        <>
+          A agência repassa <b className="tabular">{formatBRL(i.costCents)}</b> {to} e fica com <b className="tabular">{formatBRL(charge - i.costCents)}</b>.
+        </>
+      ) : (
+        "Informe o custo do fornecedor (quanto a agência repassa a ele)."
+      )}
+    </p>
   );
 }
 
